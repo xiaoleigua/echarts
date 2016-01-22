@@ -139,7 +139,7 @@ define(function (require) {
             else if (err <= 0.3) {
                 interval *= 5;
             }
-            else if (err <= 0.5) {
+            else if (err <= 0.45) {
                 interval *= 3;
             }
             else if (err <= 0.75) {
@@ -165,18 +165,20 @@ define(function (require) {
             var extent = this._extent;
             // If extent start and end are same, expand them
             if (extent[0] === extent[1]) {
-                // Expand extent
-                var expandSize = extent[0] / 2 || 1;
-                extent[0] -= expandSize;
-                extent[1] += expandSize;
+                if (extent[0] !== 0) {
+                    // Expand extent
+                    var expandSize = extent[0] / 2;
+                    extent[0] -= expandSize;
+                    extent[1] += expandSize;
+                }
+                else {
+                    extent[1] = 1;
+                }
             }
             // If there are no data and extent are [Infinity, -Infinity]
             if (extent[1] === -Infinity && extent[0] === Infinity) {
+                extent[0] = 0;
                 extent[1] = 1;
-                extent[0] = -1;
-                this._niceExtent = [-1, 1];
-                this._interval = 0.5;
-                return;
             }
 
             this.niceTicks(approxTickNum, fixMin, fixMax);

@@ -7,6 +7,7 @@ define(function (require) {
 
     var zrUtil = require('zrender/core/util');
     var numberUtil = require('../util/number');
+    var formatUtil = require('../util/format');
 
     var IntervalScale = require('./Interval');
 
@@ -14,6 +15,7 @@ define(function (require) {
 
     var mathCeil = Math.ceil;
     var mathFloor = Math.floor;
+    var ONE_DAY = 3600000 * 24;
 
     // FIXME 公用？
     var bisect = function (a, x, lo, hi) {
@@ -30,54 +32,6 @@ define(function (require) {
     };
 
     /**
-     * @param {string} str
-     * @return {string}
-     * @inner
-     */
-    var s2d = function (str) {
-        return str < 10 ? ('0' + str) : str;
-    };
-
-    /**
-     * ISO Date format
-     * @param {string} tpl
-     * @param {number} value
-     * @inner
-     */
-    var format = function (tpl, value) {
-        if (tpl === 'week'
-            || tpl === 'month'
-            || tpl === 'quarter'
-            || tpl === 'half-year'
-            || tpl === 'year'
-        ) {
-            tpl = 'MM-dd\nyyyy';
-        }
-
-        var date = numberUtil.parseDate(value);
-        var y = date.getFullYear();
-        var M = date.getMonth() + 1;
-        var d = date.getDate();
-        var h = date.getHours();
-        var m = date.getMinutes();
-        var s = date.getSeconds();
-
-        tpl = tpl.replace('MM', s2d(M))
-            .toLowerCase()
-            .replace('yyyy', y)
-            .replace('yy', y % 100)
-            .replace('dd', s2d(d))
-            .replace('d', d)
-            .replace('hh', s2d(h))
-            .replace('h', h)
-            .replace('mm', s2d(m))
-            .replace('m', m)
-            .replace('ss', s2d(s))
-            .replace('s', s);
-
-        return tpl;
-    };
-    /**
      * @alias module:echarts/coord/scale/Time
      * @constructor
      */
@@ -90,7 +44,36 @@ define(function (require) {
 
             var date = new Date(val);
 
-            return format(stepLvl[0], date);
+            return formatUtil.formatTime(stepLvl[0], date);
+        },
+
+        // Overwrite
+        niceExtent: function (approxTickNum, fixMin, fixMax) {
+            var extent = this._extent;
+            // If extent start and end are same, expand them
+            if (extent[0] === extent[1]) {
+                // Expand extent
+                extent[0] -= ONE_DAY;
+                extent[1] += ONE_DAY;
+            }
+            // If there are no data and extent are [Infinity, -Infinity]
+            if (extent[1] === -Infinity && extent[0] === Infinity) {
+                var d = new Date();
+                extent[1] = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+                extent[0] = extent[1] - ONE_DAY;
+            }
+
+            this.niceTicks(approxTickNum, fixMin, fixMax);
+
+            // var extent = this._extent;
+            var interval = this._interval;
+
+            if (!fixMin) {
+                extent[0] = numberUtil.round(mathFloor(extent[0] / interval) * interval);
+            }
+            if (!fixMax) {
+                extent[1] = numberUtil.round(mathCeil(extent[1] / interval) * interval);
+            }
         },
 
         // Overwrite
@@ -142,12 +125,12 @@ define(function (require) {
         ['hh:mm\nMM-dd',2,      3600000 * 2],    // 2h
         ['hh:mm\nMM-dd',6,      3600000 * 6],    // 6h
         ['hh:mm\nMM-dd',12,     3600000 * 12],   // 12h
-        ['MM-dd\nyyyy', 1,      3600000 * 24],   // 1d
-        ['week',        7,      3600000 * 24 * 7],        // 7d
-        ['month',       1,      3600000 * 24 * 31],       // 1M
-        ['quarter',     3,      3600000 * 24 * 380 / 4],  // 3M
-        ['half-year',   6,      3600000 * 24 * 380 / 2],  // 6M
-        ['year',        1,      3600000 * 24 * 380]       // 1Y
+        ['MM-dd\nyyyy', 1,      ONE_DAY],   // 1d
+        ['week',        7,      ONE_DAY * 7],        // 7d
+        ['month',       1,      ONE_DAY * 31],       // 1M
+        ['quarter',     3,      ONE_DAY * 380 / 4],  // 3M
+        ['half-year',   6,      ONE_DAY * 380 / 2],  // 6M
+        ['year',        1,      ONE_DAY * 380]       // 1Y
     ];
 
     /**

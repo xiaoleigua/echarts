@@ -38,10 +38,12 @@ define(function (require) {
     // TODO Transform first or filter first
     var PROCESSOR_STAGES = ['transform', 'filter', 'statistic'];
 
-    function registerEventWithLowercaseName(eventName, handler, context) {
-        // Event name is all lowercase
-        eventName = eventName && eventName.toLowerCase();
-        Eventful.prototype.on.call(this, eventName, handler, context);
+    function createRegisterEventWithLowercaseName(method) {
+        return function (eventName, handler, context) {
+            // Event name is all lowercase
+            eventName = eventName && eventName.toLowerCase();
+            Eventful.prototype[method].call(this, eventName, handler, context);
+        };
     }
     /**
      * @module echarts~MessageCenter
@@ -49,7 +51,9 @@ define(function (require) {
     function MessageCenter() {
         Eventful.call(this);
     }
-    MessageCenter.prototype.on = registerEventWithLowercaseName;
+    MessageCenter.prototype.on = createRegisterEventWithLowercaseName('on');
+    MessageCenter.prototype.off = createRegisterEventWithLowercaseName('off');
+    MessageCenter.prototype.one = createRegisterEventWithLowercaseName('one');
     zrUtil.mixin(MessageCenter, Eventful);
     /**
      * @module echarts~ECharts
@@ -194,6 +198,13 @@ define(function (require) {
      */
     echartsProto.getModel = function () {
         return this._model;
+    };
+
+    /**
+     * @return {Object}
+     */
+    echartsProto.getOption = function () {
+        return zrUtil.clone(this._model.option);
     };
 
     /**
@@ -373,15 +384,7 @@ define(function (require) {
             doRender.call(this, ecModel, payload);
 
             // Set background
-            var backgroundColor = ecModel.get('backgroundColor');
-            // In IE8
-            if (!env.canvasSupported) {
-                var colorArr = colorTool.parse(backgroundColor);
-                backgroundColor = colorTool.stringify(colorArr, 'rgb');
-                if (colorArr[3] === 0) {
-                    backgroundColor = 'transparent';
-                }
-            }
+            var backgroundColor = ecModel.get('backgroundColor') || 'transparent';
 
             var painter = this._zr.painter;
             // TODO all use clearColor ?
@@ -391,7 +394,15 @@ define(function (require) {
                 });
             }
             else {
-                backgroundColor = backgroundColor || 'transparent';
+                // In IE8
+                if (!env.canvasSupported) {
+                    var colorArr = colorTool.parse(backgroundColor);
+                    backgroundColor = colorTool.stringify(colorArr, 'rgb');
+                    if (colorArr[3] === 0) {
+                        backgroundColor = 'transparent';
+                    }
+                }
+                backgroundColor = backgroundColor;
                 this._dom.style.backgroundColor = backgroundColor;
             }
 
@@ -499,7 +510,7 @@ define(function (require) {
             {mainType: 'series', query: payload},
             function (seriesModel, index) {
                 var chartView = this._chartsMap[seriesModel.__viewId];
-                if (chartView) {
+                if (chartView && chartView.__alive) {
                     chartView[method](
                         seriesModel, ecModel, this._api, payload
                     );
@@ -537,7 +548,6 @@ define(function (require) {
         var zr = this._zr;
         this._loadingFX = el;
 
-        zr.painter.clear();
         zr.add(el);
     };
 
@@ -602,7 +612,6 @@ define(function (require) {
 
             (updateMethod !== 'none' && !isHighlightOrDownplay)
                 && updateMethods[updateMethod].call(this, payload);
-
             if (!silent) {
                 // Follow the rule of action batch
                 if (batched) {
@@ -623,7 +632,9 @@ define(function (require) {
      * Register event
      * @method
      */
-    echartsProto.on = registerEventWithLowercaseName;
+    echartsProto.on = createRegisterEventWithLowercaseName('on');
+    echartsProto.off = createRegisterEventWithLowercaseName('off');
+    echartsProto.one = createRegisterEventWithLowercaseName('one');
 
     /**
      * @param {string} methodName
@@ -662,7 +673,7 @@ define(function (require) {
         var zr = this._zr;
 
         for (var i = 0; i < viewList.length; i++) {
-            viewList[i].__keepAlive = false;
+            viewList[i].__alive = false;
         }
 
         ecModel[isComponent ? 'eachComponent' : 'eachSeries'](function (componentType, model) {
@@ -696,14 +707,14 @@ define(function (require) {
             }
 
             model.__viewId = viewId;
-            view.__keepAlive = true;
+            view.__alive = true;
             view.__id = viewId;
             view.__model = model;
         }, this);
 
         for (var i = 0; i < viewList.length;) {
             var view = viewList[i];
-            if (!view.__keepAlive) {
+            if (!view.__alive) {
                 zr.remove(view.group);
                 view.dispose(ecModel, this._api);
                 viewList.splice(i, 1);
@@ -789,13 +800,13 @@ define(function (require) {
         }, this);
 
         each(this._chartsViews, function (chart) {
-            chart.__keepAlive = false;
+            chart.__alive = false;
         }, this);
 
         // Render all charts
         ecModel.eachSeries(function (seriesModel, idx) {
             var chartView = this._chartsMap[seriesModel.__viewId];
-            chartView.__keepAlive = true;
+            chartView.__alive = true;
             chartView.render(seriesModel, ecModel, api, payload);
 
             updateZ(seriesModel, chartView);
@@ -803,7 +814,7 @@ define(function (require) {
 
         // Remove groups of unrendered charts
         each(this._chartsViews, function (chart) {
-            if (!chart.__keepAlive) {
+            if (!chart.__alive) {
                 chart.remove(ecModel, api);
             }
         }, this);
@@ -839,10 +850,17 @@ define(function (require) {
     };
 
     /**
-     * @return {boolean]
+     * @return {boolean}
      */
     echartsProto.isDisposed = function () {
         return this._disposed;
+    };
+
+    /**
+     * Clear
+     */
+    echartsProto.clear = function () {
+        this.setOption({}, true);
     };
     /**
      * Dispose instance
@@ -937,12 +955,47 @@ define(function (require) {
         /**
          * @type {number}
          */
-        version: '3.0.0',
+        version: '3.0.1',
         dependencies: {
-            zrender: '3.0.0'
+            zrender: '3.0.1'
         }
     };
 
+    function enableConnect(chart) {
+
+        var STATUS_PENDING = 0;
+        var STATUS_UPDATING = 1;
+        var STATUS_UPDATED = 2;
+        var STATUS_KEY = '__connectUpdateStatus';
+        function updateConnectedChartsStatus(charts, status) {
+            for (var i = 0; i < charts.length; i++) {
+                var otherChart = charts[i];
+                otherChart[STATUS_KEY] = status;
+            }
+        }
+        zrUtil.each(eventActionMap, function (actionType, eventType) {
+            chart._messageCenter.on(eventType, function (event) {
+                if (connectedGroups[chart.group] && chart[STATUS_KEY] !== STATUS_PENDING) {
+                    var action = chart.makeActionFromEvent(event);
+                    var otherCharts = [];
+                    for (var id in instances) {
+                        var otherChart = instances[id];
+                        if (otherChart !== chart && otherChart.group === chart.group) {
+                            otherCharts.push(otherChart);
+                        }
+                    }
+                    updateConnectedChartsStatus(otherCharts, STATUS_PENDING);
+                    each(otherCharts, function (otherChart) {
+                        if (otherChart[STATUS_KEY] !== STATUS_UPDATING) {
+                            otherChart.dispatchAction(action);
+                        }
+                    });
+                    updateConnectedChartsStatus(otherCharts, STATUS_UPDATED);
+                }
+            });
+        });
+
+    }
     /**
      * @param {HTMLDomElement} dom
      * @param {Object} [theme]
@@ -963,31 +1016,13 @@ define(function (require) {
         }
 
         var chart = new ECharts(dom, theme, opts);
-        chart.id = idBase++;
+        chart.id = 'ec_' + idBase++;
         instances[chart.id] = chart;
 
         dom.setAttribute &&
             dom.setAttribute(DOM_ATTRIBUTE_KEY, chart.id);
 
-        // Connecting
-        zrUtil.each(eventActionMap, function (actionType, eventType) {
-            // FIXME
-            chart._messageCenter.on(eventType, function (event) {
-                if (connectedGroups[chart.group]) {
-                    chart.__connectedActionDispatching = true;
-                    for (var id in instances) {
-                        var action = chart.makeActionFromEvent(event);
-                        var otherChart = instances[id];
-                        if (otherChart !== chart && otherChart.group === chart.group) {
-                            if (!otherChart.__connectedActionDispatching) {
-                                otherChart.dispatchAction(action);
-                            }
-                        }
-                    }
-                    chart.__connectedActionDispatching = false;
-                }
-            });
-        });
+        enableConnect(chart);
 
         return chart;
     };
@@ -1006,7 +1041,7 @@ define(function (require) {
                     groupId = chart.group;
                 }
             });
-            groupId = groupId || groupIdBase++;
+            groupId = groupId || ('g_' + groupIdBase++);
             zrUtil.each(charts, function (chart) {
                 chart.group = groupId;
             });
@@ -1218,9 +1253,9 @@ define(function (require) {
     // Exports
     // --------
 
-    echarts.graphic = require('echarts/util/graphic');
-    echarts.number = require('echarts/util/number');
-    echarts.format = require('echarts/util/format');
+    echarts.graphic = require('./util/graphic');
+    echarts.number = require('./util/number');
+    echarts.format = require('./util/format');
 
     echarts.util = {};
     each([

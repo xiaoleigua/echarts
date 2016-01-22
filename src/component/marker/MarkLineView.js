@@ -13,7 +13,7 @@ define(function (require) {
 
     var LineDraw = require('../../chart/helper/LineDraw');
 
-    var markLineTransform = function (data, coordSys, baseAxis, valueAxis, item) {
+    var markLineTransform = function (data, coordSys, baseAxis, valueAxis, precision, item) {
         // Special type markLine like 'min', 'max', 'average'
         var mlType = item.type;
         if (!zrUtil.isArray(item)
@@ -30,31 +30,31 @@ define(function (require) {
             var mlFrom = zrUtil.extend({}, item);
             var mlTo = {};
 
-            var extent = data.getDataExtent(valueAxis.dim, true);
-
             mlFrom.type = null;
 
             // FIXME Polar should use circle
             mlFrom[baseAxisKey] = baseScaleExtent[0];
             mlTo[baseAxisKey] = baseScaleExtent[1];
 
-            var percent = mlType === 'average' ?
-                0.5 : (mlType === 'max' ? 1 : 0);
+            var value = mlType === 'average'
+                ? data.getSum(valueAxis.dim, true) / data.count()
+                : data.getDataExtent(valueAxis.dim)[mlType === 'max' ? 1 : 0];
 
-            var value = (extent[1] - extent[0]) * percent + extent[0];
             // Round if axis is cateogry
             value = valueAxis.coordToData(valueAxis.dataToCoord(value));
 
             mlFrom[valueAxisKey] = mlTo[valueAxisKey] = value;
 
             item = [mlFrom, mlTo, { // Extra option for tooltip and label
-                type: mlType
+                type: mlType,
+                // Force to use the value of calculated value.
+                value: +value.toFixed(precision)
             }];
         }
         item = [
             markerHelper.dataTransform(data, coordSys, item[0]),
             markerHelper.dataTransform(data, coordSys, item[1]),
-            {}
+            zrUtil.extend({}, item[2])
         ];
 
         // Merge from option and to option into line option
@@ -243,10 +243,11 @@ define(function (require) {
         if (coordSys) {
             var baseAxis = coordSys.getBaseAxis();
             var valueAxis = coordSys.getOtherAxis(baseAxis);
+            var precision = mlModel.get('precision');
 
             var optData = zrUtil.filter(
                 zrUtil.map(mlModel.get('data'), zrUtil.curry(
-                    markLineTransform, seriesData, coordSys, baseAxis, valueAxis
+                    markLineTransform, seriesData, coordSys, baseAxis, valueAxis, precision
                 )),
                 zrUtil.curry(markLineFilter, coordSys)
             );
