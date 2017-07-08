@@ -1,14 +1,22 @@
 define(function (require) {
 
-    var mathMax = Math.max;
-    var mathMin = Math.min;
     var zrUtil = require('zrender/core/util');
     var numberUtil = require('../../util/number');
     var layout = require('../../util/layout');
-    var parsePercent = numberUtil.parsePercent;
-    var retrieveValue = zrUtil.retrieve;
+    var helper = require('./helper');
     var BoundingRect = require('zrender/core/BoundingRect');
     var helper = require('./helper');
+
+    var mathMax = Math.max;
+    var mathMin = Math.min;
+    var parsePercent = numberUtil.parsePercent;
+    var retrieveValue = zrUtil.retrieve;
+    var each = zrUtil.each;
+
+    var PATH_BORDER_WIDTH = ['itemStyle', 'normal', 'borderWidth'];
+    var PATH_GAP_WIDTH = ['itemStyle', 'normal', 'gapWidth'];
+    var PATH_UPPER_LABEL_SHOW = ['upperLabel', 'normal', 'show'];
+    var PATH_UPPER_LABEL_HEIGHT = ['upperLabel', 'normal', 'height'];
 
     /**
      * @public
@@ -21,16 +29,7 @@ define(function (require) {
 
             var ecWidth = api.getWidth();
             var ecHeight = api.getHeight();
-
-            var size = seriesModel.get('size') || []; // Compatible with ec2.
-            var containerWidth = parsePercent(
-                retrieveValue(seriesModel.get('width'), size[0]),
-                ecWidth
-            );
-            var containerHeight = parsePercent(
-                retrieveValue(seriesModel.get('height'), size[1]),
-                ecHeight
-            );
+            var seriesOption = seriesModel.option;
 
             var layoutInfo = layout.getLayoutRect(
                 seriesModel.getBoxLayoutParams(),
@@ -40,54 +39,89 @@ define(function (require) {
                 }
             );
 
+            var size = seriesOption.size || []; // Compatible with ec2.
+            var containerWidth = parsePercent(
+                retrieveValue(layoutInfo.width, size[0]),
+                ecWidth
+            );
+            var containerHeight = parsePercent(
+                retrieveValue(layoutInfo.height, size[1]),
+                ecHeight
+            );
+
             // Fetch payload info.
             var payloadType = payload && payload.type;
             var targetInfo = helper.retrieveTargetInfo(payload, seriesModel);
             var rootRect = (payloadType === 'treemapRender' || payloadType === 'treemapMove')
                 ? payload.rootRect : null;
             var viewRoot = seriesModel.getViewRoot();
+            var viewAbovePath = helper.getPathToRoot(viewRoot);
 
             if (payloadType !== 'treemapMove') {
                 var rootSize = payloadType === 'treemapZoomToNode'
-                    ? estimateRootSize(seriesModel, targetInfo, containerWidth, containerHeight)
+                    ? estimateRootSize(
+                        seriesModel, targetInfo, viewRoot, containerWidth, containerHeight
+                    )
                     : rootRect
                     ? [rootRect.width, rootRect.height]
                     : [containerWidth, containerHeight];
 
-                var sort = seriesModel.get('sort');
+                var sort = seriesOption.sort;
                 if (sort && sort !== 'asc' && sort !== 'desc') {
                     sort = 'desc';
                 }
                 var options = {
-                    squareRatio: seriesModel.get('squareRatio'),
-                    sort: sort
+                    squareRatio: seriesOption.squareRatio,
+                    sort: sort,
+                    leafDepth: seriesOption.leafDepth
                 };
 
-                viewRoot.setLayout({
+                // layout should be cleared because using updateView but not update.
+                viewRoot.hostTree.clearLayouts();
+
+                // TODO
+                // optimize: if out of view clip, do not layout.
+                // But take care that if do not render node out of view clip,
+                // how to calculate start po
+
+                var viewRootLayout = {
                     x: 0, y: 0,
                     width: rootSize[0], height: rootSize[1],
                     area: rootSize[0] * rootSize[1]
-                });
+                };
+                viewRoot.setLayout(viewRootLayout);
 
-                squarify(viewRoot, options);
+                squarify(viewRoot, options, false, 0);
+                // Supplement layout.
+                var viewRootLayout = viewRoot.getLayout();
+                each(viewAbovePath, function (node, index) {
+                    var childValue = (viewAbovePath[index + 1] || viewRoot).getValue();
+                    node.setLayout(zrUtil.extend(
+                        {dataExtent: [childValue, childValue], borderWidth: 0, upperHeight: 0},
+                        viewRootLayout
+                    ));
+                });
             }
 
-            // Set root position
-            viewRoot.setLayout(
+            var treeRoot = seriesModel.getData().tree.root;
+
+            treeRoot.setLayout(
                 calculateRootPosition(layoutInfo, rootRect, targetInfo),
                 true
             );
 
             seriesModel.setLayoutInfo(layoutInfo);
 
-            // Optimize
             // FIXME
             // 现在没有clip功能，暂时取ec高宽。
             prunning(
+                treeRoot,
+                // Transform to base element coordinate system.
+                new BoundingRect(-layoutInfo.x, -layoutInfo.y, ecWidth, ecHeight),
+                viewAbovePath,
                 viewRoot,
-                new BoundingRect(-layoutInfo.x, -layoutInfo.y, ecWidth, ecHeight)
+                0
             );
-
         });
     }
 
@@ -100,10 +134,11 @@ define(function (require) {
      * @param {module:echarts/data/Tree~TreeNode} node
      * @param {Object} options
      * @param {string} options.sort 'asc' or 'desc'
-     * @param {boolean} options.hideChildren
      * @param {number} options.squareRatio
+     * @param {boolean} hideChildren
+     * @param {number} depth
      */
-    function squarify(node, options) {
+    function squarify(node, options, hideChildren, depth) {
         var width;
         var height;
 
@@ -116,25 +151,34 @@ define(function (require) {
         height = thisLayout.height;
 
         // Considering border and gap
-        var itemStyleModel = node.getModel('itemStyle.normal');
-        var borderWidth = itemStyleModel.get('borderWidth');
-        var halfGapWidth = itemStyleModel.get('gapWidth') / 2;
+        var nodeModel = node.getModel();
+        var borderWidth = nodeModel.get(PATH_BORDER_WIDTH);
+        var halfGapWidth = nodeModel.get(PATH_GAP_WIDTH) / 2;
+        var upperLabelHeight = getUpperLabelHeight(nodeModel);
+        var upperHeight = Math.max(borderWidth, upperLabelHeight);
         var layoutOffset = borderWidth - halfGapWidth;
+        var layoutOffsetUpper = upperHeight - halfGapWidth;
         var nodeModel = node.getModel();
 
-        node.setLayout({borderWidth: borderWidth}, true);
+        node.setLayout({
+            borderWidth: borderWidth,
+            upperHeight: upperHeight,
+            upperLabelHeight: upperLabelHeight
+        }, true);
 
         width = mathMax(width - 2 * layoutOffset, 0);
-        height = mathMax(height - 2 * layoutOffset, 0);
+        height = mathMax(height - layoutOffset - layoutOffsetUpper, 0);
 
         var totalArea = width * height;
-        var viewChildren = initChildren(node, nodeModel, totalArea, options);
+        var viewChildren = initChildren(
+            node, nodeModel, totalArea, options, hideChildren, depth
+        );
 
         if (!viewChildren.length) {
             return;
         }
 
-        var rect = {x: layoutOffset, y: layoutOffset, width: width, height: height};
+        var rect = {x: layoutOffset, y: layoutOffsetUpper, width: width, height: height};
         var rowFixedLength = mathMin(width, height);
         var best = Infinity; // the best row score so far
         var row = [];
@@ -166,9 +210,7 @@ define(function (require) {
             position(row, rowFixedLength, rect, halfGapWidth, true);
         }
 
-        // Update option carefully.
-        var hideChildren;
-        if (!options.hideChildren) {
+        if (!hideChildren) {
             var childrenVisibleMin = nodeModel.get('childrenVisibleMin');
             if (childrenVisibleMin != null && totalArea < childrenVisibleMin) {
                 hideChildren = true;
@@ -176,23 +218,22 @@ define(function (require) {
         }
 
         for (var i = 0, len = viewChildren.length; i < len; i++) {
-            var childOption = zrUtil.extend({
-                hideChildren: hideChildren
-            }, options);
-
-            squarify(viewChildren[i], childOption);
+            squarify(viewChildren[i], options, hideChildren, depth + 1);
         }
     }
 
     /**
      * Set area to each child, and calculate data extent for visual coding.
      */
-    function initChildren(node, nodeModel, totalArea, options) {
+    function initChildren(node, nodeModel, totalArea, options, hideChildren, depth) {
         var viewChildren = node.children || [];
         var orderBy = options.sort;
         orderBy !== 'asc' && orderBy !== 'desc' && (orderBy = null);
 
-        if (options.hideChildren) {
+        var overLeafDepth = options.leafDepth != null && options.leafDepth <= depth;
+
+        // leafDepth has higher priority.
+        if (hideChildren && !overLeafDepth) {
             return (node.viewChildren = []);
         }
 
@@ -220,6 +261,11 @@ define(function (require) {
             var area = viewChildren[i].getValue() / info.sum * totalArea;
             // Do not use setLayout({...}, true), because it is needed to clear last layout.
             viewChildren[i].setLayout({area: area});
+        }
+
+        if (overLeafDepth) {
+            viewChildren.length && node.setLayout({isLeafRoot: true}, true);
+            viewChildren.length = 0;
         }
 
         node.viewChildren = viewChildren;
@@ -267,8 +313,13 @@ define(function (require) {
     function sort(viewChildren, orderBy) {
         if (orderBy) {
             viewChildren.sort(function (a, b) {
-                return orderBy === 'asc'
+                var diff = orderBy === 'asc'
                     ?  a.getValue() - b.getValue() : b.getValue() - a.getValue();
+                return diff === 0
+                    ? (orderBy === 'asc'
+                        ? a.dataIndex - b.dataIndex : b.dataIndex - a.dataIndex
+                    )
+                    : diff;
             });
         }
         return viewChildren;
@@ -306,7 +357,7 @@ define(function (require) {
         // Other dimension.
         else {
             var dataExtent = [Infinity, -Infinity];
-            zrUtil.each(children, function (child) {
+            each(children, function (child) {
                 var value = child.getValue(dimension);
                 value < dataExtent[0] && (dataExtent[0] = value);
                 value > dataExtent[1] && (dataExtent[1] = value);
@@ -393,19 +444,19 @@ define(function (require) {
     }
 
     // Return [containerWidth, containerHeight] as defualt.
-    function estimateRootSize(seriesModel, targetInfo, containerWidth, containerHeight) {
+    function estimateRootSize(seriesModel, targetInfo, viewRoot, containerWidth, containerHeight) {
         // If targetInfo.node exists, we zoom to the node,
         // so estimate whold width and heigth by target node.
         var currNode = (targetInfo || {}).node;
         var defaultSize = [containerWidth, containerHeight];
 
-        if (!currNode || currNode === seriesModel.getViewRoot()) {
+        if (!currNode || currNode === viewRoot) {
             return defaultSize;
         }
 
         var parent;
         var viewArea = containerWidth * containerHeight;
-        var area = viewArea * seriesModel.get('zoomToNodeRatio');
+        var area = viewArea * seriesModel.option.zoomToNodeRatio;
 
         while (parent = currNode.parentNode) { // jshint ignore:line
             var sum = 0;
@@ -420,12 +471,12 @@ define(function (require) {
             }
             area *= sum / currNodeValue;
 
-            var borderWidth = parent.getModel('itemStyle.normal').get('borderWidth');
-
-            if (isFinite(borderWidth)) {
-                // Considering border, suppose aspect ratio is 1.
-                area += 4 * borderWidth * borderWidth + 4 * borderWidth * Math.pow(area, 0.5);
-            }
+            // Considering border, suppose aspect ratio is 1.
+            var parentModel = parent.getModel();
+            var borderWidth = parentModel.get(PATH_BORDER_WIDTH);
+            var upperHeight = Math.max(borderWidth, getUpperLabelHeight(parentModel, borderWidth));
+            area += 4 * borderWidth * borderWidth
+                + (3 * borderWidth + upperHeight) * Math.pow(area, 0.5);
 
             area > numberUtil.MAX_SAFE_INTEGER && (area = numberUtil.MAX_SAFE_INTEGER);
 
@@ -476,24 +527,44 @@ define(function (require) {
         };
     }
 
-    // Mark invisible nodes for prunning when visual coding and rendering.
-    // Prunning depends on layout and root position, so we have to do it after them.
-    function prunning(node, clipRect) {
+    // Mark nodes visible for prunning when visual coding and rendering.
+    // Prunning depends on layout and root position, so we have to do it after layout.
+    function prunning(node, clipRect, viewAbovePath, viewRoot, depth) {
         var nodeLayout = node.getLayout();
+        var nodeInViewAbovePath = viewAbovePath[depth];
+        var isAboveViewRoot = nodeInViewAbovePath && nodeInViewAbovePath === node;
 
-        node.setLayout({invisible: !clipRect.intersect(nodeLayout)}, true);
-
-        var viewChildren = node.viewChildren || [];
-        for (var i = 0, len = viewChildren.length; i < len; i++) {
-            // Transform to child coordinate.
-            var childClipRect = new BoundingRect(
-                clipRect.x - nodeLayout.x,
-                clipRect.y - nodeLayout.y,
-                clipRect.width,
-                clipRect.height
-            );
-            prunning(viewChildren[i], childClipRect);
+        if (
+            (nodeInViewAbovePath && !isAboveViewRoot)
+            || (depth === viewAbovePath.length && node !== viewRoot)
+        ) {
+            return;
         }
+
+        node.setLayout({
+            // isInView means: viewRoot sub tree + viewAbovePath
+            isInView: true,
+            // invisible only means: outside view clip so that the node can not
+            // see but still layout for animation preparation but not render.
+            invisible: !isAboveViewRoot && !clipRect.intersect(nodeLayout),
+            isAboveViewRoot: isAboveViewRoot
+        }, true);
+
+        // Transform to child coordinate.
+        var childClipRect = new BoundingRect(
+            clipRect.x - nodeLayout.x,
+            clipRect.y - nodeLayout.y,
+            clipRect.width,
+            clipRect.height
+        );
+
+        each(node.viewChildren || [], function (child) {
+            prunning(child, childClipRect, viewAbovePath, viewRoot, depth + 1);
+        });
+    }
+
+    function getUpperLabelHeight(model) {
+        return model.get(PATH_UPPER_LABEL_SHOW) ? model.get(PATH_UPPER_LABEL_HEIGHT) : 0;
     }
 
     return update;

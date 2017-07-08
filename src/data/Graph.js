@@ -10,6 +10,10 @@ define(function(require) {
 
     var zrUtil = require('zrender/core/util');
 
+    // id may be function name of Object, add a prefix to avoid this problem.
+    function generateNodeKey (id) {
+        return '_EC_' + id;
+    }
     /**
      * @alias module:echarts/data/Graph
      * @constructor
@@ -79,9 +83,14 @@ define(function(require) {
      * @param {number} [dataIndex]
      */
     graphProto.addNode = function (id, dataIndex) {
+        id = id || ('' + dataIndex);
+
         var nodesMap = this._nodesMap;
 
-        if (nodesMap[id]) {
+        if (nodesMap[generateNodeKey(id)]) {
+            if (__DEV__) {
+                console.error('Graph nodes have duplicate name or id');
+            }
             return;
         }
 
@@ -90,7 +99,7 @@ define(function(require) {
 
         this.nodes.push(node);
 
-        nodesMap[id] = node;
+        nodesMap[generateNodeKey(id)] = node;
         return node;
     };
 
@@ -109,13 +118,13 @@ define(function(require) {
      * @return {module:echarts/data/Graph.Node}
      */
     graphProto.getNodeById = function (id) {
-        return this._nodesMap[id];
+        return this._nodesMap[generateNodeKey(id)];
     };
 
     /**
      * Add a new edge
-     * @param {string|module:echarts/data/Graph.Node} n1
-     * @param {string|module:echarts/data/Graph.Node} n2
+     * @param {number|string|module:echarts/data/Graph.Node} n1
+     * @param {number|string|module:echarts/data/Graph.Node} n2
      * @param {number} [dataIndex=-1]
      * @return {module:echarts/data/Graph.Edge}
      */
@@ -123,11 +132,19 @@ define(function(require) {
         var nodesMap = this._nodesMap;
         var edgesMap = this._edgesMap;
 
+        // PNEDING
+        if (typeof n1 === 'number') {
+            n1 = this.nodes[n1];
+        }
+        if (typeof n2 === 'number') {
+            n2 = this.nodes[n2];
+        }
+
         if (!(n1 instanceof Node)) {
-            n1 = nodesMap[n1];
+            n1 = nodesMap[generateNodeKey(n1)];
         }
         if (!(n2 instanceof Node)) {
-            n2 = nodesMap[n2];
+            n2 = nodesMap[generateNodeKey(n2)];
         }
         if (!n1 || !n2) {
             return;
@@ -233,8 +250,8 @@ define(function(require) {
     graphProto.breadthFirstTraverse = function (
         cb, startNode, direction, context
     ) {
-        if (!startNode instanceof Node) {
-            startNode = this._nodesMap[startNode];
+        if (!(startNode instanceof Node)) {
+            startNode = this._nodesMap[generateNodeKey(startNode)];
         }
         if (!startNode) {
             return;
@@ -261,7 +278,7 @@ define(function(require) {
                 var otherNode = e.node1 === currentNode
                     ? e.node2 : e.node1;
                 if (!otherNode.__visited) {
-                    if (cb.call(otherNode, otherNode, currentNode)) {
+                    if (cb.call(context, otherNode, currentNode)) {
                         // Stop traversing
                         return;
                     }
@@ -305,19 +322,6 @@ define(function(require) {
         for (var i = 0, len = edgeData.count(); i < len; i++) {
             edges[edgeData.getRawIndex(i)].dataIndex = i;
         }
-    };
-
-    /**
-     * Set edge data
-     * @param {module:echarts/data/List} edgeData
-     */
-    graphProto.setEdgeData = function (edgeData) {
-        this.edgeData = edgeData;
-        this._edgeDataSaved = edgeData.cloneShallow();
-    };
-
-    graphProto.restoreData = function () {
-        this.edgeData = this._edgeDataSaved.cloneShallow();
     };
 
     /**
@@ -443,7 +447,7 @@ define(function(require) {
             return;
         }
         var graph = this.hostGraph;
-        var itemModel = graph.data.getItemModel(this.dataIndex);
+        var itemModel = graph.edgeData.getItemModel(this.dataIndex);
 
         return itemModel.getModel(path);
     };

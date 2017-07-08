@@ -5,9 +5,10 @@ define(function(require) {
     var List = require('../../data/List');
     var zrUtil = require('zrender/core/util');
     var modelUtil = require('../../util/model');
+    var numberUtil = require('../../util/number');
     var completeDimensions = require('../../data/helper/completeDimensions');
 
-    var dataSelectableMixin = require('../helper/dataSelectableMixin');
+    var dataSelectableMixin = require('../../component/helper/selectableMixin');
 
     var PieSeries = require('../../echarts').extendSeriesModel({
 
@@ -15,23 +16,23 @@ define(function(require) {
 
         // Overwrite
         init: function (option) {
-            this.$superApply('init', arguments);
+            PieSeries.superApply(this, 'init', arguments);
 
             // Enable legend selection for each data item
             // Use a function instead of direct access because data reference may changed
             this.legendDataProvider = function () {
-                return this._dataBeforeProcessed;
+                return this.getRawData();
             };
 
-            this.updateSelectedMap();
+            this.updateSelectedMap(option.data);
 
             this._defaultLabelLine(option);
         },
 
         // Overwrite
         mergeOption: function (newOption) {
-            this.$superCall('mergeOption', newOption);
-            this.updateSelectedMap();
+            PieSeries.superCall(this, 'mergeOption', newOption);
+            this.updateSelectedMap(this.option.data);
         },
 
         getInitialData: function (option, ecModel) {
@@ -43,10 +44,20 @@ define(function(require) {
 
         // Overwrite
         getDataParams: function (dataIndex) {
-            var data = this._data;
-            var params = this.$superCall('getDataParams', dataIndex);
+            var data = this.getData();
+            var params = PieSeries.superCall(this, 'getDataParams', dataIndex);
             // FIXME toFixed?
-            params.percent = +(data.get('value', dataIndex) / data.getSum('value') * 100).toFixed(2);
+
+            var valueList = [];
+            data.each('value', function (value) {
+                valueList.push(value);
+            });
+
+            params.percent = numberUtil.getPercentWithPrecision(
+                valueList,
+                dataIndex,
+                data.hostModel.get('percentPrecision')
+            );
 
             params.$vars.push('percent');
             return params;
@@ -89,6 +100,13 @@ define(function(require) {
             // 南丁格尔玫瑰图模式，'radius'（半径） | 'area'（面积）
             // roseType: null,
 
+            percentPrecision: 2,
+
+            // If still show when all data zero.
+            stillShowZeroSum: true,
+
+            // cursor: null,
+
             label: {
                 normal: {
                     // If rotate around circle
@@ -107,9 +125,9 @@ define(function(require) {
                 normal: {
                     show: true,
                     // 引导线两段中的第一段长度
-                    length: 20,
+                    length: 15,
                     // 引导线两段中的第二段长度
-                    length2: 5,
+                    length2: 15,
                     smooth: false,
                     lineStyle: {
                         // color: 各异,
@@ -120,16 +138,13 @@ define(function(require) {
             },
             itemStyle: {
                 normal: {
-                    // color: 各异,
-                    borderColor: 'rgba(0,0,0,0)',
                     borderWidth: 1
                 },
-                emphasis: {
-                    // color: 各异,
-                    borderColor: 'rgba(0,0,0,0)',
-                    borderWidth: 1
-                }
+                emphasis: {}
             },
+
+            // Animation type canbe expansion, scale
+            animationType: 'expansion',
 
             animationEasing: 'cubicOut',
 

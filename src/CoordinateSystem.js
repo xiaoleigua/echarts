@@ -2,39 +2,47 @@ define(function(require) {
 
     'use strict';
 
-    // var zrUtil = require('zrender/core/util');
+    var zrUtil = require('zrender/core/util');
+
     var coordinateSystemCreators = {};
 
     function CoordinateSystemManager() {
 
-        this._coordinateSystems = {};
-
-        this._coordinateSystemsList = [];
+        this._coordinateSystems = [];
     }
 
     CoordinateSystemManager.prototype = {
 
         constructor: CoordinateSystemManager,
 
-        update: function (ecModel, api) {
-            var coordinateSystems = {};
-            for (var type in coordinateSystemCreators) {
-                coordinateSystems[type] = coordinateSystemCreators[type].create(ecModel, api);
-            }
+        create: function (ecModel, api) {
+            var coordinateSystems = [];
+            zrUtil.each(coordinateSystemCreators, function (creater, type) {
+                var list = creater.create(ecModel, api);
+                coordinateSystems = coordinateSystems.concat(list || []);
+            });
 
             this._coordinateSystems = coordinateSystems;
         },
 
-        get: function (type, idx) {
-            var list = this._coordinateSystems[type];
-            if (list) {
-                return list[idx || 0];
-            }
+        update: function (ecModel, api) {
+            zrUtil.each(this._coordinateSystems, function (coordSys) {
+                // FIXME MUST have
+                coordSys.update && coordSys.update(ecModel, api);
+            });
+        },
+
+        getCoordinateSystems: function () {
+            return this._coordinateSystems.slice();
         }
     };
 
     CoordinateSystemManager.register = function (type, coordinateSystemCreator) {
         coordinateSystemCreators[type] = coordinateSystemCreator;
+    };
+
+    CoordinateSystemManager.get = function (type) {
+        return coordinateSystemCreators[type];
     };
 
     return CoordinateSystemManager;

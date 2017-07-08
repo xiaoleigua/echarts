@@ -15,7 +15,7 @@ define(function (require) {
 
         buildPath: function (ctx, shape) {
             for (var i in shape) {
-                if (i.indexOf('ends') === 0) {
+                if (shape.hasOwnProperty(i) && i.indexOf('ends') === 0) {
                     var pts = shape[i];
                     ctx.moveTo(pts[0][0], pts[0][1]);
                     ctx.lineTo(pts[1][0], pts[1][1]);
@@ -126,12 +126,12 @@ define(function (require) {
         updateMethod(
             this.childAt(this.bodyIndex),
             {shape: {points: itemLayout.bodyEnds}},
-            seriesModel
+            seriesModel, idx
         );
         updateMethod(
             this.childAt(this.whiskerIndex),
             {shape: makeWhiskerEndsShape(itemLayout.whiskerEnds)},
-            seriesModel
+            seriesModel, idx
         );
 
         this.styleUpdater.call(null, this, data, idx);

@@ -6,7 +6,37 @@ define(function (require) {
 
     var TYPE_DELIMITER = '.';
     var IS_CONTAINER = '___EC__COMPONENT__CONTAINER___';
+    var MEMBER_PRIFIX = '\0ec_\0';
+
     /**
+     * Hide private class member.
+     * The same behavior as `host[name] = value;` (can be right-value)
+     * @public
+     */
+    clazz.set = function (host, name, value) {
+        return (host[MEMBER_PRIFIX + name] = value);
+    };
+
+    /**
+     * Hide private class member.
+     * The same behavior as `host[name];`
+     * @public
+     */
+    clazz.get = function (host, name) {
+        return host[MEMBER_PRIFIX + name];
+    };
+
+    /**
+     * For hidden private class member.
+     * The same behavior as `host.hasOwnProperty(name);`
+     * @public
+     */
+    clazz.hasOwn = function (host, name) {
+        return host.hasOwnProperty(MEMBER_PRIFIX + name);
+    };
+
+    /**
+     * Notice, parseClassType('') should returns {main: '', sub: ''}
      * @public
      */
     var parseClassType = clazz.parseClassType = function (componentType) {
@@ -18,53 +48,71 @@ define(function (require) {
         }
         return ret;
     };
+
     /**
      * @public
      */
-    clazz.enableClassExtend = function (RootClass, preConstruct) {
+    function checkClassType(componentType) {
+        zrUtil.assert(
+            /^[a-zA-Z0-9_]+([.][a-zA-Z0-9_]+)?$/.test(componentType),
+            'componentType "' + componentType + '" illegal'
+        );
+    }
+
+    /**
+     * @public
+     */
+    clazz.enableClassExtend = function (RootClass, mandatoryMethods) {
+
+        RootClass.$constructor = RootClass;
         RootClass.extend = function (proto) {
+
+            if (__DEV__) {
+                zrUtil.each(mandatoryMethods, function (method) {
+                    if (!proto[method]) {
+                        console.warn(
+                            'Method `' + method + '` should be implemented'
+                            + (proto.type ? ' in ' + proto.type : '') + '.'
+                        );
+                    }
+                });
+            }
+
+            var superClass = this;
             var ExtendedClass = function () {
-                preConstruct && preConstruct.apply(this, arguments);
-                RootClass.apply(this, arguments);
+                if (!proto.$constructor) {
+                    superClass.apply(this, arguments);
+                }
+                else {
+                    proto.$constructor.apply(this, arguments);
+                }
             };
 
-            zrUtil.extend(ExtendedClass.prototype, zrUtil.extend({
-                $superCall: function (methodName) {
-                    var args = zrUtil.slice(arguments, 1);
-                    return findSuperMethod(this, methodName).apply(this, args);
-                },
-                $superApply: function (methodName, args) {
-                    return findSuperMethod(this, methodName).apply(this, args);
-                }
-            }, proto));
+            zrUtil.extend(ExtendedClass.prototype, proto);
 
             ExtendedClass.extend = this.extend;
+            ExtendedClass.superCall = superCall;
+            ExtendedClass.superApply = superApply;
             zrUtil.inherits(ExtendedClass, this);
-            ExtendedClass.$superClass = this;
+            ExtendedClass.superClass = superClass;
 
             return ExtendedClass;
         };
     };
 
-    // Find the first method that different with given metod.
-    // If only use closure to implements $superApply and $supperCall,
+    // superCall should have class info, which can not be fetch from 'this'.
     // Consider this case:
     // class A has method f,
-    // class B inherits class A, overrides method f, f call this.$superApply('f'),
+    // class B inherits class A, overrides method f, f call superApply('f'),
     // class C inherits class B, do not overrides method f,
     // then when method of class C is called, dead loop occured.
-    function findSuperMethod(context, methodName) {
-        var SuperClass = context.constructor;
-        var thisMethod = context[methodName];
-        var method;
+    function superCall(context, methodName) {
+        var args = zrUtil.slice(arguments, 2);
+        return this.superClass.prototype[methodName].apply(context, args);
+    }
 
-        while (
-            (SuperClass = SuperClass.$superClass)
-            && (method = SuperClass.prototype[methodName])
-            && method === thisMethod
-        ) {/*jshint noempty:false */}
-
-        return method;
+    function superApply(context, methodName, args) {
+        return this.superClass.prototype[methodName].apply(context, args);
     }
 
     /**
@@ -88,11 +136,14 @@ define(function (require) {
 
         entity.registerClass = function (Clazz, componentType) {
             if (componentType) {
+                checkClassType(componentType);
                 componentType = parseClassType(componentType);
 
                 if (!componentType.sub) {
-                    if (storage[componentType.main]) {
-                        throw new Error(componentType.main + 'exists');
+                    if (__DEV__) {
+                        if (storage[componentType.main]) {
+                            console.warn(componentType.main + ' exists.');
+                        }
                     }
                     storage[componentType.main] = Clazz;
                 }
@@ -104,8 +155,8 @@ define(function (require) {
             return Clazz;
         };
 
-        entity.getClass = function (componentTypeMain, subType, throwWhenNotFound) {
-            var Clazz = storage[componentTypeMain];
+        entity.getClass = function (componentMainType, subType, throwWhenNotFound) {
+            var Clazz = storage[componentMainType];
 
             if (Clazz && Clazz[IS_CONTAINER]) {
                 Clazz = subType ? Clazz[subType] : null;
@@ -113,7 +164,9 @@ define(function (require) {
 
             if (throwWhenNotFound && !Clazz) {
                 throw new Error(
-                    'Component ' + componentTypeMain + '.' + (subType || '') + ' not exists'
+                    !subType
+                        ? componentMainType + '.' + 'type should be specified.'
+                        : 'Component ' + componentMainType + '.' + (subType || '') + ' not exists. Load it first.'
                 );
             }
 
@@ -194,20 +247,21 @@ define(function (require) {
      * @param {string|Array.<string>} properties
      */
     clazz.setReadOnly = function (obj, properties) {
-        if (!zrUtil.isArray(properties)) {
-            properties = properties != null ? [properties] : [];
-        }
-        zrUtil.each(properties, function (prop) {
-            var value = obj[prop];
+        // FIXME It seems broken in IE8 simulation of IE11
+        // if (!zrUtil.isArray(properties)) {
+        //     properties = properties != null ? [properties] : [];
+        // }
+        // zrUtil.each(properties, function (prop) {
+        //     var value = obj[prop];
 
-            Object.defineProperty
-                && Object.defineProperty(obj, prop, {
-                    value: value, writable: false
-                });
-            zrUtil.isArray(obj[prop])
-                && Object.freeze
-                && Object.freeze(obj[prop]);
-        });
+        //     Object.defineProperty
+        //         && Object.defineProperty(obj, prop, {
+        //             value: value, writable: false
+        //         });
+        //     zrUtil.isArray(obj[prop])
+        //         && Object.freeze
+        //         && Object.freeze(obj[prop]);
+        // });
     };
 
     return clazz;

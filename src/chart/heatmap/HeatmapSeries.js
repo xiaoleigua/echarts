@@ -20,15 +20,19 @@ define(function (require) {
             z: 2,
 
             // Cartesian coordinate system
-            xAxisIndex: 0,
-            yAxisIndex: 0,
+            // xAxisIndex: 0,
+            // yAxisIndex: 0,
 
             // Geo coordinate system
             geoIndex: 0,
 
-            // No blur
-            // Available when heatmap is on geo
-            blurSize: 20
+            blurSize: 30,
+
+            pointSize: 20,
+
+            maxOpacity: 1,
+
+            minOpacity: 0
         }
     });
 });

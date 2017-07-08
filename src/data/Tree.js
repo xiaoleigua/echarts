@@ -8,16 +8,15 @@ define(function(require) {
     var zrUtil = require('zrender/core/util');
     var Model = require('../model/Model');
     var List = require('./List');
-    var linkListHelper = require('./helper/linkList');
+    var linkList = require('./helper/linkList');
     var completeDimensions = require('./helper/completeDimensions');
 
     /**
      * @constructor module:echarts/data/Tree~TreeNode
      * @param {string} name
-     * @param {number} [dataIndex=-1]
      * @param {module:echarts/data/Tree} hostTree
      */
-    var TreeNode = function (name, dataIndex, hostTree) {
+    var TreeNode = function (name, hostTree) {
         /**
          * @type {string}
          */
@@ -54,7 +53,7 @@ define(function(require) {
          * @type {Object}
          * @readOnly
          */
-        this.dataIndex = dataIndex == null ? -1 : dataIndex;
+        this.dataIndex = -1;
 
         /**
          * @type {Array.<module:echarts/data/Tree~TreeNode>}
@@ -221,7 +220,7 @@ define(function(require) {
         },
 
         /**
-         * @param {string} path
+         * @param {string} [path]
          * @return {module:echarts/model/Model}
          */
         getModel: function (path) {
@@ -255,7 +254,7 @@ define(function(require) {
         },
 
         /**
-         * @public
+         * Get item visual
          */
         getVisual: function (key, ignoreParent) {
             return this.hostTree.data.getItemVisual(this.dataIndex, key, ignoreParent);
@@ -380,6 +379,13 @@ define(function(require) {
             for (var i = 0, len = data.count(); i < len; i++) {
                 nodes[data.getRawIndex(i)].dataIndex = i;
             }
+        },
+
+        /**
+         * Clear all layouts
+         */
+        clearLayouts: function () {
+            this.data.clearItemLayouts();
         }
     };
 
@@ -399,7 +405,7 @@ define(function(require) {
      * }
      *
      * @static
-     * @param {Objec} dataRoot Root node.
+     * @param {Object} dataRoot Root node.
      * @param {module:echarts/model/Model} hostModel
      * @param {Array.<Object>} levelOptions
      * @return module:echarts/data/Tree
@@ -408,16 +414,22 @@ define(function(require) {
 
         var tree = new Tree(hostModel, levelOptions);
         var listData = [];
+        var dimMax = 1;
 
         buildHierarchy(dataRoot);
 
         function buildHierarchy(dataNode, parentNode) {
+            var value = dataNode.value;
+            dimMax = Math.max(dimMax, zrUtil.isArray(value) ? value.length : 1);
+
             listData.push(dataNode);
 
-            var node = new TreeNode(dataNode.name, listData.length - 1, tree);
+            var node = new TreeNode(dataNode.name, tree);
             parentNode
                 ? addChild(node, parentNode)
                 : (tree.root = node);
+
+            tree._nodes.push(node);
 
             var children = dataNode.children;
             if (children) {
@@ -429,11 +441,17 @@ define(function(require) {
 
         tree.root.updateDepthAndHeight(0);
 
-        var dimensions = completeDimensions([{name: 'value'}], listData);
+        var dimensions = completeDimensions([{name: 'value'}], listData, {dimCount: dimMax});
         var list = new List(dimensions, hostModel);
         list.initData(listData);
 
-        linkListHelper.linkToTree(list, tree);
+        linkList({
+            mainData: list,
+            struct: tree,
+            structAttr: 'tree'
+        });
+
+        tree.update();
 
         return tree;
     };
@@ -452,8 +470,6 @@ define(function(require) {
 
         children.push(child);
         child.parentNode = node;
-
-        node.hostTree._nodes.push(child);
     }
 
     return Tree;

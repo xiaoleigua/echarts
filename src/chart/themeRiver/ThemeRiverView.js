@@ -1,3 +1,7 @@
+/**
+ * @file  The file used to draw themeRiver view
+ * @author  Deqing Li(annong035@gmail.com)
+ */
 define(function (require) {
 
     var poly = require('../line/poly');
@@ -29,7 +33,7 @@ define(function (require) {
             var rect = layoutInfo.rect;
             var boundaryGap = layoutInfo.boundaryGap;
 
-            group.position = [0, rect.y + boundaryGap[0]];
+            group.attr('position', [0, rect.y + boundaryGap[0]]);
 
             function keyGetter(item) {
                 return item.name;
@@ -52,25 +56,20 @@ define(function (require) {
                     group.remove(oldLayersGroups[idx]);
                     return;
                 }
-
                 var points0 = [];
                 var points1 = [];
                 var color;
                 var indices = layerSeries[idx].indices;
-
                 for (var j = 0; j < indices.length; j++) {
                     var layout = data.getItemLayout(indices[j]);
                     var x = layout.x;
                     var y0 = layout.y0;
-
                     var y = layout.y;
 
                     points0.push([x, y0]);
                     points1.push([x, y0 + y]);
 
-                    color = rawData.getItemVisual(
-                        data.getRawIndex(indices[j]), 'color'
-                    );
+                    color = rawData.getItemVisual(indices[j], 'color');
                 }
 
                 var polygon;
@@ -129,7 +128,7 @@ define(function (require) {
                 }
 
                 var hoverItemStyleModel = itemModel.getModel('itemStyle.emphasis');
-                var itemStyleModel = itemModel.getModel('itemStyle.nomral');
+                var itemStyleModel = itemModel.getModel('itemStyle.normal');
                 var textStyleModel = labelModel.getModel('textStyle');
 
                 text.setStyle({
@@ -139,7 +138,7 @@ define(function (require) {
                         : '',
                     textFont: textStyleModel.getFont(),
                     textAlign: labelModel.get('textAlign'),
-                    textBaseline: 'middle'
+                    textVerticalAlign: 'middle'
                 });
 
                 polygon.setStyle(zrUtil.extend({
@@ -151,10 +150,12 @@ define(function (require) {
 
             this._layersSeries = layerSeries;
             this._layers = newLayersGroups;
-        }
+        },
+
+        dispose: function () {}
     });
 
-    //add animation to the view
+    // add animation to the view
     function createGridClipShape(rect, seriesModel, cb) {
         var rectEl = new graphic.Rect({
             shape: {

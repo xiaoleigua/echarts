@@ -11,6 +11,21 @@ define(function(require) {
 
     var layout = {};
 
+    /**
+     * @public
+     */
+    var LOCATION_PARAMS = layout.LOCATION_PARAMS = [
+        'left', 'right', 'top', 'bottom', 'width', 'height'
+    ];
+
+    /**
+     * @public
+     */
+    var HV_NAMES = layout.HV_NAMES = [
+        ['width', 'left', 'right'],
+        ['height', 'top', 'bottom']
+    ];
+
     function boxLayout(orient, group, gap, maxWidth, maxHeight) {
         var x = 0;
         var y = 0;
@@ -36,7 +51,7 @@ define(function(require) {
                     x = 0;
                     nextX = moveX;
                     y += currentLineMaxSize + gap;
-                    currentLineMaxSize = 0;
+                    currentLineMaxSize = rect.height;
                 }
                 else {
                     currentLineMaxSize = Math.max(currentLineMaxSize, rect.height);
@@ -50,7 +65,7 @@ define(function(require) {
                     x += currentLineMaxSize + gap;
                     y = 0;
                     nextY = moveY;
-                    currentLineMaxSize = 0;
+                    currentLineMaxSize = rect.width;
                 }
                 else {
                     currentLineMaxSize = Math.max(currentLineMaxSize, rect.width);
@@ -227,19 +242,40 @@ define(function(require) {
                 top = containerHeight - height - verticalMargin;
                 break;
         }
+        // If something is wrong and left, top, width, height are calculated as NaN
+        left = left || 0;
+        top = top || 0;
+        if (isNaN(width)) {
+            // Width may be NaN if only one value is given except width
+            width = containerWidth - left - (right || 0);
+        }
+        if (isNaN(height)) {
+            // Height may be NaN if only one value is given except height
+            height = containerHeight - top - (bottom || 0);
+        }
 
         var rect = new BoundingRect(left + margin[3], top + margin[0], width, height);
         rect.margin = margin;
         return rect;
     };
 
+
     /**
-     * Position group of component in viewport
+     * Position a zr element in viewport
      *  Group position is specified by either
      *  {left, top}, {right, bottom}
      *  If all properties exists, right and bottom will be igonred.
      *
-     * @param {module:zrender/container/Group} group
+     * Logic:
+     *     1. Scale (against origin point in parent coord)
+     *     2. Rotate (against origin point in parent coord)
+     *     3. Traslate (with el.position by this method)
+     * So this method only fixes the last step 'Traslate', which does not affect
+     * scaling and rotating.
+     *
+     * If be called repeatly with the same input el, the same result will be gotten.
+     *
+     * @param {module:zrender/Element} el Should have `getBoundingRect` method.
      * @param {Object} positionInfo
      * @param {number|string} [positionInfo.left]
      * @param {number|string} [positionInfo.top]
@@ -247,25 +283,71 @@ define(function(require) {
      * @param {number|string} [positionInfo.bottom]
      * @param {Object} containerRect
      * @param {string|number} margin
+     * @param {Object} [opt]
+     * @param {Array.<number>} [opt.hv=[1,1]] Only horizontal or only vertical.
+     * @param {Array.<number>} [opt.boundingMode='all']
+     *        Specify how to calculate boundingRect when locating.
+     *        'all': Position the boundingRect that is transformed and uioned
+     *               both itself and its descendants.
+     *               This mode simplies confine the elements in the bounding
+     *               of their container (e.g., using 'right: 0').
+     *        'raw': Position the boundingRect that is not transformed and only itself.
+     *               This mode is useful when you want a element can overflow its
+     *               container. (Consider a rotated circle needs to be located in a corner.)
+     *               In this mode positionInfo.width/height can only be number.
      */
-    layout.positionGroup = function (
-        group, positionInfo, containerRect, margin
-    ) {
-        var groupRect = group.getBoundingRect();
+    layout.positionElement = function (el, positionInfo, containerRect, margin, opt) {
+        var h = !opt || !opt.hv || opt.hv[0];
+        var v = !opt || !opt.hv || opt.hv[1];
+        var boundingMode = opt && opt.boundingMode || 'all';
 
-        positionInfo = zrUtil.extend(zrUtil.clone(positionInfo), {
-            width: groupRect.width,
-            height: groupRect.height
-        });
+        if (!h && !v) {
+            return;
+        }
+
+        var rect;
+        if (boundingMode === 'raw') {
+            rect = el.type === 'group'
+                ? new BoundingRect(0, 0, +positionInfo.width || 0, +positionInfo.height || 0)
+                : el.getBoundingRect();
+        }
+        else {
+            rect = el.getBoundingRect();
+            if (el.needLocalTransform()) {
+                var transform = el.getLocalTransform();
+                // Notice: raw rect may be inner object of el,
+                // which should not be modified.
+                rect = rect.clone();
+                rect.applyTransform(transform);
+            }
+        }
 
         positionInfo = layout.getLayoutRect(
-            positionInfo, containerRect, margin
+            zrUtil.defaults(
+                {width: rect.width, height: rect.height},
+                positionInfo
+            ),
+            containerRect,
+            margin
         );
 
-        group.position = [
-            positionInfo.x - groupRect.x,
-            positionInfo.y - groupRect.y
-        ];
+        // Because 'tranlate' is the last step in transform
+        // (see zrender/core/Transformable#getLocalTransfrom),
+        // we can just only modify el.position to get final result.
+        var elPos = el.position;
+        var dx = h ? positionInfo.x - rect.x : 0;
+        var dy = v ? positionInfo.y - rect.y : 0;
+
+        el.attr('position', boundingMode === 'raw' ? [dx, dy] : [elPos[0] + dx, elPos[1] + dy]);
+    };
+
+    /**
+     * @param {Object} option Contains some of the properties in HV_NAMES.
+     * @param {number} hvIdx 0: horizontal; 1: vertical.
+     */
+    layout.sizeCalculable = function (option, hvIdx) {
+        return option[HV_NAMES[hvIdx][0]] != null
+            || (option[HV_NAMES[hvIdx][1]] != null && option[HV_NAMES[hvIdx][2]] != null);
     };
 
     /**
@@ -289,25 +371,27 @@ define(function(require) {
      *
      * @param {Object} targetOption
      * @param {Object} newOption
-     * @param {Object} [opt]
-     * @param {boolean} [opt.ignoreSize=false] Some component must has width and height.
+     * @param {Object|string} [opt]
+     * @param {boolean|Array.<boolean>} [opt.ignoreSize=false] Some component must has width and height.
      */
     layout.mergeLayoutParam = function (targetOption, newOption, opt) {
-        opt = opt || {};
-        var hNames = ['width', 'left', 'right']; // Order by priority.
-        var vNames = ['height', 'top', 'bottom']; // Order by priority.
-        var hResult = merge(hNames);
-        var vResult = merge(vNames);
+        !zrUtil.isObject(opt) && (opt = {});
 
-        copy(hNames, targetOption, hResult);
-        copy(vNames, targetOption, vResult);
+        var ignoreSize = opt.ignoreSize;
+        !zrUtil.isArray(ignoreSize) && (ignoreSize = [ignoreSize, ignoreSize]);
 
-        function merge(names) {
+        var hResult = merge(HV_NAMES[0], 0);
+        var vResult = merge(HV_NAMES[1], 1);
+
+        copy(HV_NAMES[0], targetOption, hResult);
+        copy(HV_NAMES[1], targetOption, vResult);
+
+        function merge(names, hvIdx) {
             var newParams = {};
             var newValueCount = 0;
             var merged = {};
             var mergedValueCount = 0;
-            var enoughParamNumber = opt.ignoreSize ? 1 : 2;
+            var enoughParamNumber = 2;
 
             each(names, function (name) {
                 merged[name] = targetOption[name];
@@ -320,28 +404,22 @@ define(function(require) {
                 hasValue(merged, name) && mergedValueCount++;
             });
 
+            if (ignoreSize[hvIdx]) {
+                // Only one of left/right is premitted to exist.
+                if (hasValue(newOption, names[1])) {
+                    merged[names[2]] = null;
+                }
+                else if (hasValue(newOption, names[2])) {
+                    merged[names[1]] = null;
+                }
+                return merged;
+            }
+
             // Case: newOption: {width: ..., right: ...},
             // or targetOption: {right: ...} and newOption: {width: ...},
             // There is no conflict when merged only has params count
             // little than enoughParamNumber.
             if (mergedValueCount === enoughParamNumber || !newValueCount) {
-                return merged;
-            }
-            else if (mergedValueCount < enoughParamNumber) {
-                // In common way, 'auto' means auto calculate by left/right
-                // or top/bottom. But Some components may auto calculate by
-                // other way (like dataZoom auto by coordnate system). In
-                // that case we can set defualtOption 'auto', and if
-                // mergedValueCount litter than enoughParamNumber, 'auto'
-                // will filtered by priority and returned.
-                var autoCount = 0;
-                each(names, function (name) {
-                    if (merged[name] === 'auto') {
-                        autoCount < enoughParamNumber - mergedValueCount
-                            ? autoCount++
-                            : (merged[name] = null);
-                    }
-                });
                 return merged;
             }
             // Case: newOption: {width: ..., right: ...},
@@ -352,7 +430,6 @@ define(function(require) {
             }
             else {
                 // Chose another param from targetOption by priority.
-                // When 'ignoreSize', enoughParamNumber is 1 and those will not happen.
                 for (var i = 0; i < names.length; i++) {
                     var name = names[i];
                     if (!hasProp(newParams, name) && hasProp(targetOption, name)) {
@@ -385,14 +462,19 @@ define(function(require) {
      * @return {Object} Result contains those props.
      */
     layout.getLayoutParams = function (source) {
-        var params = {};
-        source && each(
-            ['left', 'right', 'top', 'bottom', 'width', 'height'],
-            function (name) {
-                source.hasOwnProperty(name) && (params[name] = source[name]);
-            }
-        );
-        return params;
+        return layout.copyLayoutParams({}, source);
+    };
+
+    /**
+     * Retrieve 'left', 'right', 'top', 'bottom', 'width', 'height' from object.
+     * @param {Object} source
+     * @return {Object} Result contains those props.
+     */
+    layout.copyLayoutParams = function (target, source) {
+        source && target && each(LOCATION_PARAMS, function (name) {
+            source.hasOwnProperty(name) && (target[name] = source[name]);
+        });
+        return target;
     };
 
     return layout;

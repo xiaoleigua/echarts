@@ -31,12 +31,14 @@ define(function (require) {
             );
         },
 
-        updateLayout: function () {
-            this._symbolDraw.updateLayout();
+        updateLayout: function (seriesModel) {
+            this._symbolDraw.updateLayout(seriesModel);
         },
 
         remove: function (ecModel, api) {
             this._symbolDraw && this._symbolDraw.remove(api, true);
-        }
+        },
+
+        dispose: function () {}
     });
 });

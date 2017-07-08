@@ -96,16 +96,17 @@ define(function (require) {
 
     var piePieceProto = PiePiece.prototype;
 
-    function getLabelStyle(data, idx, state, labelModel) {
+    function getLabelStyle(data, idx, state, labelModel, labelPosition) {
         var textStyleModel = labelModel.getModel('textStyle');
-        var position = labelModel.get('position');
-        var isLabelInside = position === 'inside' || position === 'inner';
+        var isLabelInside = labelPosition === 'inside' || labelPosition === 'inner';
         return {
             fill: textStyleModel.getTextColor()
                 || (isLabelInside ? '#fff' : data.getItemVisual(idx, 'color')),
+            opacity: data.getItemVisual(idx, 'opacity'),
             textFont: textStyleModel.getFont(),
-            text: data.hostModel.getFormattedLabel(idx, state)
-                || data.getName(idx)
+            text: zrUtil.retrieve(
+                data.hostModel.getFormattedLabel(idx, state), data.getName(idx)
+            )
         };
     }
 
@@ -118,34 +119,53 @@ define(function (require) {
         var layout = data.getItemLayout(idx);
         var sectorShape = zrUtil.extend({}, layout);
         sectorShape.label = null;
+
         if (firstCreate) {
             sector.setShape(sectorShape);
-            sector.shape.endAngle = layout.startAngle;
-            graphic.updateProps(sector, {
-                shape: {
-                    endAngle: layout.endAngle
-                }
-            }, seriesModel);
+
+            var animationType = seriesModel.getShallow('animationType');
+            if (animationType === 'scale') {
+                sector.shape.r = layout.r0;
+                graphic.initProps(sector, {
+                    shape: {
+                        r: layout.r
+                    }
+                }, seriesModel, idx);
+            }
+            // Expansion
+            else {
+                sector.shape.endAngle = layout.startAngle;
+                graphic.updateProps(sector, {
+                    shape: {
+                        endAngle: layout.endAngle
+                    }
+                }, seriesModel, idx);
+            }
+
         }
         else {
             graphic.updateProps(sector, {
                 shape: sectorShape
-            }, seriesModel);
+            }, seriesModel, idx);
         }
 
         // Update common style
         var itemStyleModel = itemModel.getModel('itemStyle');
         var visualColor = data.getItemVisual(idx, 'color');
 
-        sector.setStyle(
+        sector.useStyle(
             zrUtil.defaults(
                 {
+                    lineJoin: 'bevel',
                     fill: visualColor
                 },
                 itemStyleModel.getModel('normal').getItemStyle()
             )
         );
         sector.hoverStyle = itemStyleModel.getModel('emphasis').getItemStyle();
+
+        var cursorStyle = itemModel.getShallow('cursor');
+        cursorStyle && sector.attr('cursor', cursorStyle);
 
         // Toggle selected
         toggleItemSelected(
@@ -175,7 +195,7 @@ define(function (require) {
             }, 300, 'elasticOut');
         }
         sector.off('mouseover').off('mouseout').off('emphasis').off('normal');
-        if (itemModel.get('hoverAnimation')) {
+        if (itemModel.get('hoverAnimation') && seriesModel.isAnimationEnabled()) {
             sector
                 .on('mouseover', onEmphasis)
                 .on('mouseout', onNormal)
@@ -205,18 +225,18 @@ define(function (require) {
                     [labelLayout.x, labelLayout.y], [labelLayout.x, labelLayout.y], [labelLayout.x, labelLayout.y]
                 ]
             }
-        }, seriesModel);
+        }, seriesModel, idx);
 
         graphic.updateProps(labelText, {
             style: {
                 x: labelLayout.x,
                 y: labelLayout.y
             }
-        }, seriesModel);
+        }, seriesModel, idx);
         labelText.attr({
             style: {
+                textVerticalAlign: labelLayout.verticalAlign,
                 textAlign: labelLayout.textAlign,
-                textBaseline: labelLayout.textBaseline,
                 textFont: labelLayout.font
             },
             rotation: labelLayout.rotation,
@@ -228,8 +248,9 @@ define(function (require) {
         var labelHoverModel = itemModel.getModel('label.emphasis');
         var labelLineModel = itemModel.getModel('labelLine.normal');
         var labelLineHoverModel = itemModel.getModel('labelLine.emphasis');
+        var labelPosition = labelModel.get('position') || labelHoverModel.get('position');
 
-        labelText.setStyle(getLabelStyle(data, idx, 'normal', labelModel));
+        labelText.setStyle(getLabelStyle(data, idx, 'normal', labelModel, labelPosition));
 
         labelText.ignore = labelText.normalIgnore = !labelModel.get('show');
         labelText.hoverIgnore = !labelHoverModel.get('show');
@@ -239,11 +260,12 @@ define(function (require) {
 
         // Default use item visual color
         labelLine.setStyle({
-            stroke: visualColor
+            stroke: visualColor,
+            opacity: data.getItemVisual(idx, 'opacity')
         });
         labelLine.setStyle(labelLineModel.getModel('lineStyle').getLineStyle());
 
-        labelText.hoverStyle = getLabelStyle(data, idx, 'emphasis', labelHoverModel);
+        labelText.hoverStyle = getLabelStyle(data, idx, 'emphasis', labelHoverModel, labelPosition);
         labelLine.hoverStyle = labelLineHoverModel.getModel('lineStyle').getLineStyle();
 
         var smooth = labelLineModel.get('smooth');
@@ -279,6 +301,7 @@ define(function (require) {
 
             var hasAnimation = ecModel.get('animation');
             var isFirstRender = !oldData;
+            var animationType = seriesModel.get('animationType');
 
             var onSectorClick = zrUtil.curry(
                 updateDataSelected, this.uid, seriesModel, hasAnimation, api
@@ -289,7 +312,8 @@ define(function (require) {
             data.diff(oldData)
                 .add(function (idx) {
                     var piePiece = new PiePiece(data, idx);
-                    if (isFirstRender) {
+                    // Default expansion animation
+                    if (isFirstRender && animationType !== 'scale') {
                         piePiece.eachChild(function (child) {
                             child.stopAnimation(true);
                         });
@@ -317,7 +341,11 @@ define(function (require) {
                 })
                 .execute();
 
-            if (hasAnimation && isFirstRender && data.count() > 0) {
+            if (
+                hasAnimation && isFirstRender && data.count() > 0
+                // Default expansion animation
+                && animationType !== 'scale'
+            ) {
                 var shape = data.getItemLayout(0);
                 var r = Math.max(api.getWidth(), api.getHeight()) / 2;
 
@@ -329,6 +357,8 @@ define(function (require) {
 
             this._data = data;
         },
+
+        dispose: function () {},
 
         _createClipPath: function (
             cx, cy, r, startAngle, clockwise, cb, seriesModel
@@ -352,7 +382,22 @@ define(function (require) {
             }, seriesModel, cb);
 
             return clipPath;
+        },
+
+        /**
+         * @implement
+         */
+        containPoint: function (point, seriesModel) {
+            var data = seriesModel.getData();
+            var itemLayout = data.getItemLayout(0);
+            if (itemLayout) {
+                var dx = point[0] - itemLayout.cx;
+                var dy = point[1] - itemLayout.cy;
+                var radius = Math.sqrt(dx * dx + dy * dy);
+                return radius <= itemLayout.r && radius >= itemLayout.r0;
+            }
         }
+
     });
 
     return Pie;

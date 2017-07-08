@@ -33,6 +33,37 @@ define(function (require) {
     }
 
     /**
+     * Update polar
+     */
+    function updatePolarScale(ecModel, api) {
+        var polar = this;
+        var angleAxis = polar.getAngleAxis();
+        var radiusAxis = polar.getRadiusAxis();
+        // Reset scale
+        angleAxis.scale.setExtent(Infinity, -Infinity);
+        radiusAxis.scale.setExtent(Infinity, -Infinity);
+
+        ecModel.eachSeries(function (seriesModel) {
+            if (seriesModel.coordinateSystem === polar) {
+                var data = seriesModel.getData();
+                radiusAxis.scale.unionExtentFromData(data, 'radius');
+                angleAxis.scale.unionExtentFromData(data, 'angle');
+            }
+        });
+
+        niceScaleExtent(angleAxis.scale, angleAxis.model);
+        niceScaleExtent(radiusAxis.scale, radiusAxis.model);
+
+        // Fix extent of category angle axis
+        if (angleAxis.type === 'category' && !angleAxis.onBand) {
+            var extent = angleAxis.getExtent();
+            var diff = 360 / angleAxis.scale.count();
+            angleAxis.inverse ? (extent[1] += diff) : (extent[1] -= diff);
+            angleAxis.setExtent(extent[0], extent[1]);
+        }
+    }
+
+    /**
      * Set common axis properties
      * @param {module:echarts/coord/polar/AngleAxis|module:echarts/coord/polar/RadiusAxis}
      * @param {module:echarts/coord/polar/AxisModel}
@@ -55,51 +86,18 @@ define(function (require) {
         axis.model = axisModel;
     }
 
-    /**
-     * Set polar axis scale from series data
-     */
-    function setPolarAxisFromSeries(polarList, ecModel, api) {
-        ecModel.eachSeries(function (seriesModel) {
-            if (seriesModel.get('coordinateSystem') === 'polar') {
-                var polarIndex = seriesModel.get('polarIndex') || 0;
-
-                var polar = polarList[polarIndex];
-                if (!polar) {
-                    // api.log('Polar configuration not exist for series ' + seriesModel.name + '.');
-                    return;
-                }
-                // Inject polar instance
-                seriesModel.coordinateSystem = polar;
-
-                var radiusAxis = polar.getRadiusAxis();
-                var angleAxis = polar.getAngleAxis();
-
-                var data = seriesModel.getData();
-                radiusAxis.scale.unionExtent(
-                    data.getDataExtent('radius', radiusAxis.type !== 'category')
-                );
-                angleAxis.scale.unionExtent(
-                    data.getDataExtent('angle', angleAxis.type !== 'category')
-                );
-            }
-        });
-
-        zrUtil.each(polarList, function (polar) {
-            var angleAxis = polar.getAngleAxis();
-            var radiusAxis = polar.getRadiusAxis();
-            niceScaleExtent(angleAxis, angleAxis.model);
-            niceScaleExtent(radiusAxis, radiusAxis.model);
-        });
-    }
 
     var polarCreator = {
+
+        dimensions: Polar.prototype.dimensions,
 
         create: function (ecModel, api) {
             var polarList = [];
             ecModel.eachComponent('polar', function (polarModel, idx) {
                 var polar = new Polar(idx);
-                // Inject resize method
+                // Inject resize and update method
                 polar.resize = resizePolar;
+                polar.update = updatePolarScale;
 
                 var radiusAxis = polar.getRadiusAxis();
                 var angleAxis = polar.getAngleAxis();
@@ -114,19 +112,29 @@ define(function (require) {
                 polarList.push(polar);
 
                 polarModel.coordinateSystem = polar;
+                polar.model = polarModel;
             });
+            // Inject coordinateSystem to series
+            ecModel.eachSeries(function (seriesModel) {
+                if (seriesModel.get('coordinateSystem') === 'polar') {
+                    var polarModel = ecModel.queryComponents({
+                        mainType: 'polar',
+                        index: seriesModel.get('polarIndex'),
+                        id: seriesModel.get('polarId')
+                    })[0];
 
-            setPolarAxisFromSeries(polarList, ecModel, api);
-
-            // Fix extent of category angle axis
-            // FIXME
-            zrUtil.each(polarList, function (polar) {
-                var angleAxis = polar.getAngleAxis();
-                if (angleAxis.type === 'category' && !angleAxis.onBand) {
-                    var extent = angleAxis.getExtent();
-                    var diff = 360 / angleAxis.scale.count();
-                    angleAxis.inverse ? (extent[1] += diff) : (extent[1] -= diff);
-                    angleAxis.setExtent(extent[0], extent[1]);
+                    if (__DEV__) {
+                        if (!polarModel) {
+                            throw new Error(
+                                'Polar "' + zrUtil.retrieve(
+                                    seriesModel.get('polarIndex'),
+                                    seriesModel.get('polarId'),
+                                    0
+                                ) + '" not found'
+                            );
+                        }
+                    }
+                    seriesModel.coordinateSystem = polarModel.coordinateSystem;
                 }
             });
 

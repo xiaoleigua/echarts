@@ -18,7 +18,14 @@ define(function (require) {
         /**
          * @type {module:echarts/coord/single/Single}
          */
-        coordinateSystem: null
+        coordinateSystem: null,
+
+        /**
+         * @override
+         */
+        getCoordSysModel: function () {
+            return this;
+        }
 
     });
 
@@ -35,14 +42,19 @@ define(function (require) {
 
         orient: 'horizontal',
 
-        singleIndex: 0,
-
         axisLine: {
             show: true,
             lineStyle: {
                 width: 2,
                 type: 'solid'
             }
+        },
+
+        // Single coordinate system and single axis is the,
+        // which is used as the parent tooltip model.
+        // same model, so we set default tooltip show as true.
+        tooltip: {
+            show: true
         },
 
         axisTick: {

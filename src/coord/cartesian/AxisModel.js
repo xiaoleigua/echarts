@@ -16,28 +16,41 @@ define(function(require) {
         axis: null,
 
         /**
-         * @public
-         * @param {boolean} needs Whether axis needs cross zero.
+         * @override
          */
-        setNeedsCrossZero: function (needs) {
-            this.option.scale = !needs;
+        init: function () {
+            AxisModel.superApply(this, 'init', arguments);
+            this.resetRange();
         },
 
         /**
-         * @public
-         * @param {number} min
+         * @override
          */
-        setMin: function (min) {
-            this.option.min = min;
+        mergeOption: function () {
+            AxisModel.superApply(this, 'mergeOption', arguments);
+            this.resetRange();
         },
 
         /**
-         * @public
-         * @param {number} max
+         * @override
          */
-        setMax: function (max) {
-            this.option.max = max;
+        restoreData: function () {
+            AxisModel.superApply(this, 'restoreData', arguments);
+            this.resetRange();
+        },
+
+        /**
+         * @override
+         * @return {module:echarts/model/Component}
+         */
+        getCoordSysModel: function () {
+            return this.ecModel.queryComponents({
+                mainType: 'grid',
+                index: this.option.gridIndex,
+                id: this.option.gridId
+            })[0];
         }
+
     });
 
     function getAxisType(axisDim, option) {
@@ -48,7 +61,11 @@ define(function(require) {
     zrUtil.merge(AxisModel.prototype, require('../axisModelCommonMixin'));
 
     var extraOption = {
-        gridIndex: 0
+        // gridIndex: 0,
+        // gridId: '',
+
+        // Offset is for multiple axis on the same position
+        offset: 0
     };
 
     axisModelCreator('x', AxisModel, getAxisType, extraOption);

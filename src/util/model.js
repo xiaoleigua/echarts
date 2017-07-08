@@ -2,63 +2,12 @@ define(function(require) {
 
     var formatUtil = require('./format');
     var nubmerUtil = require('./number');
-    var zrUtil = require('zrender/core/util');
-
     var Model = require('../model/Model');
-
-    var AXIS_DIMS = ['x', 'y', 'z', 'radius', 'angle'];
+    var zrUtil = require('zrender/core/util');
+    var each = zrUtil.each;
+    var isObject = zrUtil.isObject;
 
     var modelUtil = {};
-
-    /**
-     * Create "each" method to iterate names.
-     *
-     * @pubilc
-     * @param  {Array.<string>} names
-     * @param  {Array.<string>=} attrs
-     * @return {Function}
-     */
-    modelUtil.createNameEach = function (names, attrs) {
-        names = names.slice();
-        var capitalNames = zrUtil.map(names, modelUtil.capitalFirst);
-        attrs = (attrs || []).slice();
-        var capitalAttrs = zrUtil.map(attrs, modelUtil.capitalFirst);
-
-        return function (callback, context) {
-            zrUtil.each(names, function (name, index) {
-                var nameObj = {name: name, capital: capitalNames[index]};
-
-                for (var j = 0; j < attrs.length; j++) {
-                    nameObj[attrs[j]] = name + capitalAttrs[j];
-                }
-
-                callback.call(context, nameObj);
-            });
-        };
-    };
-
-    /**
-     * @public
-     */
-    modelUtil.capitalFirst = function (str) {
-        return str ? str.charAt(0).toUpperCase() + str.substr(1) : str;
-    };
-
-    /**
-     * Iterate each dimension name.
-     *
-     * @public
-     * @param {Function} callback The parameter is like:
-     *                            {
-     *                                name: 'angle',
-     *                                capital: 'Angle',
-     *                                axis: 'angleAxis',
-     *                                axisIndex: 'angleAixs',
-     *                                index: 'angleIndex'
-     *                            }
-     * @param {Object} context
-     */
-    modelUtil.eachAxisDim = modelUtil.createNameEach(AXIS_DIMS, ['axisIndex', 'axis', 'index']);
 
     /**
      * If value is not array, then translate it to array.
@@ -66,81 +15,11 @@ define(function(require) {
      * @return {Array} [value] or value
      */
     modelUtil.normalizeToArray = function (value) {
-        return zrUtil.isArray(value)
+        return value instanceof Array
             ? value
             : value == null
             ? []
             : [value];
-    };
-
-    /**
-     * If tow dataZoomModels has the same axis controlled, we say that they are 'linked'.
-     * dataZoomModels and 'links' make up one or more graphics.
-     * This function finds the graphic where the source dataZoomModel is in.
-     *
-     * @public
-     * @param {Function} forEachNode Node iterator.
-     * @param {Function} forEachEdgeType edgeType iterator
-     * @param {Function} edgeIdGetter Giving node and edgeType, return an array of edge id.
-     * @return {Function} Input: sourceNode, Output: Like {nodes: [], dims: {}}
-     */
-    modelUtil.createLinkedNodesFinder = function (forEachNode, forEachEdgeType, edgeIdGetter) {
-
-        return function (sourceNode) {
-            var result = {
-                nodes: [],
-                records: {} // key: edgeType.name, value: Object (key: edge id, value: boolean).
-            };
-
-            forEachEdgeType(function (edgeType) {
-                result.records[edgeType.name] = {};
-            });
-
-            if (!sourceNode) {
-                return result;
-            }
-
-            absorb(sourceNode, result);
-
-            var existsLink;
-            do {
-                existsLink = false;
-                forEachNode(processSingleNode);
-            }
-            while (existsLink);
-
-            function processSingleNode(node) {
-                if (!isNodeAbsorded(node, result) && isLinked(node, result)) {
-                    absorb(node, result);
-                    existsLink = true;
-                }
-            }
-
-            return result;
-        };
-
-        function isNodeAbsorded(node, result) {
-            return zrUtil.indexOf(result.nodes, node) >= 0;
-        }
-
-        function isLinked(node, result) {
-            var hasLink = false;
-            forEachEdgeType(function (edgeType) {
-                zrUtil.each(edgeIdGetter(node, edgeType) || [], function (edgeId) {
-                    result.records[edgeType.name][edgeId] && (hasLink = true);
-                });
-            });
-            return hasLink;
-        }
-
-        function absorb(node, result) {
-            result.nodes.push(node);
-            forEachEdgeType(function (edgeType) {
-                zrUtil.each(edgeIdGetter(node, edgeType) || [], function (edgeId) {
-                    result.records[edgeType.name][edgeId] = true;
-                });
-            });
-        }
     };
 
     /**
@@ -167,7 +46,7 @@ define(function(require) {
             var normalOpt = opt.normal = opt.normal || {};
 
             // Default emphasis option from normal
-            zrUtil.each(subOpts, function (subOptName) {
+            each(subOpts, function (subOptName) {
                 var val = zrUtil.retrieve(emphasisOpt[subOptName], normalOpt[subOptName]);
                 if (val != null) {
                     emphasisOpt[subOptName] = val;
@@ -176,28 +55,7 @@ define(function(require) {
         }
     };
 
-    /**
-     * Create a model proxy to be used in tooltip for edge data, markLine data, markPoint data.
-     * @param {Object} opt
-     * @param {string} [opt.seriesIndex]
-     * @param {Object} [opt.name]
-     * @param {module:echarts/data/List} data
-     * @param {Array.<Object>} rawData
-     */
-    modelUtil.createDataFormatModel = function (opt, data, rawData) {
-        var model = new Model();
-        zrUtil.mixin(model, modelUtil.dataFormatMixin);
-        model.seriesIndex = opt.seriesIndex;
-        model.name = opt.name || '';
-
-        model.getData = function () {
-            return data;
-        };
-        model.getRawDataArray = function () {
-            return rawData;
-        };
-        return model;
-    };
+    modelUtil.LABEL_OPTIONS = ['position', 'offset', 'show', 'textStyle', 'distance', 'formatter'];
 
     /**
      * data could be [12, 2323, {value: 223}, [1221, 23], {value: [2, 23]}]
@@ -208,6 +66,18 @@ define(function(require) {
     modelUtil.getDataItemValue = function (dataItem) {
         // Performance sensitive.
         return dataItem && (dataItem.value == null ? dataItem : dataItem.value);
+    };
+
+    /**
+     * data could be [12, 2323, {value: 223}, [1221, 23], {value: [2, 23]}]
+     * This helper method determine if dataItem has extra option besides value
+     * @param {string|number|Date|Array|Object} dataItem
+     */
+    modelUtil.isDataItemOption = function (dataItem) {
+        return isObject(dataItem)
+            && !(dataItem instanceof Array);
+            // // markLine data can be array
+            // && !(dataItem[0] && isObject(dataItem[0]) && !(dataItem[0] instanceof Array));
     };
 
     /**
@@ -222,7 +92,12 @@ define(function(require) {
             return value;
         }
 
-        if (dimType === 'time' && !isFinite(value) && value != null && value !== '-') {
+        if (dimType === 'time'
+            // spead up when using timestamp
+            && typeof value !== 'number'
+            && value != null
+            && value !== '-'
+        ) {
             value = +nubmerUtil.parseDate(value);
         }
 
@@ -233,33 +108,59 @@ define(function(require) {
             ? NaN : +value; // If string (like '-'), using '+' parse to NaN
     };
 
+    /**
+     * Create a model proxy to be used in tooltip for edge data, markLine data, markPoint data.
+     * @param {module:echarts/data/List} data
+     * @param {Object} opt
+     * @param {string} [opt.seriesIndex]
+     * @param {Object} [opt.name]
+     * @param {Object} [opt.mainType]
+     * @param {Object} [opt.subType]
+     */
+    modelUtil.createDataFormatModel = function (data, opt) {
+        var model = new Model();
+        zrUtil.mixin(model, modelUtil.dataFormatMixin);
+        model.seriesIndex = opt.seriesIndex;
+        model.name = opt.name || '';
+        model.mainType = opt.mainType;
+        model.subType = opt.subType;
+
+        model.getData = function () {
+            return data;
+        };
+        return model;
+    };
+
+    // PENDING A little ugly
     modelUtil.dataFormatMixin = {
         /**
          * Get params for formatter
          * @param {number} dataIndex
+         * @param {string} [dataType]
          * @return {Object}
          */
-        getDataParams: function (dataIndex) {
-            var data = this.getData();
-
-            var seriesIndex = this.seriesIndex;
-            var seriesName = this.name;
-
-            var rawValue = this.getRawValue(dataIndex);
+        getDataParams: function (dataIndex, dataType) {
+            var data = this.getData(dataType);
+            var rawValue = this.getRawValue(dataIndex, dataType);
             var rawDataIndex = data.getRawIndex(dataIndex);
             var name = data.getName(dataIndex, true);
-
-            // Data may not exists in the option given by user
-            var rawDataArray = this.getRawDataArray();
-            var itemOpt = rawDataArray && rawDataArray[rawDataIndex];
+            var itemOpt = data.getRawDataItem(dataIndex);
+            var color = data.getItemVisual(dataIndex, 'color');
 
             return {
-                seriesIndex: seriesIndex,
-                seriesName: seriesName,
+                componentType: this.mainType,
+                componentSubType: this.subType,
+                seriesType: this.mainType === 'series' ? this.subType : null,
+                seriesIndex: this.seriesIndex,
+                seriesId: this.id,
+                seriesName: this.name,
                 name: name,
                 dataIndex: rawDataIndex,
                 data: itemOpt,
+                dataType: dataType,
                 value: rawValue,
+                color: color,
+                marker: formatUtil.getTooltipMarker(color),
 
                 // Param name list for mapping `a`, `b`, `c`, `d`, `e`
                 $vars: ['seriesName', 'name', 'value']
@@ -270,18 +171,22 @@ define(function(require) {
          * Format label
          * @param {number} dataIndex
          * @param {string} [status='normal'] 'normal' or 'emphasis'
-         * @param {Function|string} [formatter] Default use the `itemStyle[status].label.formatter`
+         * @param {string} [dataType]
+         * @param {number} [dimIndex]
+         * @param {string} [labelProp='label']
          * @return {string}
          */
-        getFormattedLabel: function (dataIndex, status, formatter) {
+        getFormattedLabel: function (dataIndex, status, dataType, dimIndex, labelProp) {
             status = status || 'normal';
-            var data = this.getData();
+            var data = this.getData(dataType);
             var itemModel = data.getItemModel(dataIndex);
 
-            var params = this.getDataParams(dataIndex);
-            if (!formatter) {
-                formatter = itemModel.get(['label', status, 'formatter']);
+            var params = this.getDataParams(dataIndex, dataType);
+            if (dimIndex != null && (params.value instanceof Array)) {
+                params.value = params.value[dimIndex];
             }
+
+            var formatter = itemModel.get([labelProp || 'label', status, 'formatter']);
 
             if (typeof formatter === 'function') {
                 params.status = status;
@@ -295,17 +200,463 @@ define(function(require) {
         /**
          * Get raw value in option
          * @param {number} idx
+         * @param {string} [dataType]
          * @return {Object}
          */
-        getRawValue: function (idx) {
-            var itemModel = this.getData().getItemModel(idx);
-            if (itemModel && itemModel.option != null) {
-                var dataItem = itemModel.option;
-                return (zrUtil.isObject(dataItem) && !zrUtil.isArray(dataItem))
+        getRawValue: function (idx, dataType) {
+            var data = this.getData(dataType);
+            var dataItem = data.getRawDataItem(idx);
+            if (dataItem != null) {
+                return (isObject(dataItem) && !(dataItem instanceof Array))
                     ? dataItem.value : dataItem;
+            }
+        },
+
+        /**
+         * Should be implemented.
+         * @param {number} dataIndex
+         * @param {boolean} [multipleSeries=false]
+         * @param {number} [dataType]
+         * @return {string} tooltip string
+         */
+        formatTooltip: zrUtil.noop
+    };
+
+    /**
+     * Mapping to exists for merge.
+     *
+     * @public
+     * @param {Array.<Object>|Array.<module:echarts/model/Component>} exists
+     * @param {Object|Array.<Object>} newCptOptions
+     * @return {Array.<Object>} Result, like [{exist: ..., option: ...}, {}],
+     *                          index of which is the same as exists.
+     */
+    modelUtil.mappingToExists = function (exists, newCptOptions) {
+        // Mapping by the order by original option (but not order of
+        // new option) in merge mode. Because we should ensure
+        // some specified index (like xAxisIndex) is consistent with
+        // original option, which is easy to understand, espatially in
+        // media query. And in most case, merge option is used to
+        // update partial option but not be expected to change order.
+        newCptOptions = (newCptOptions || []).slice();
+
+        var result = zrUtil.map(exists || [], function (obj, index) {
+            return {exist: obj};
+        });
+
+        // Mapping by id or name if specified.
+        each(newCptOptions, function (cptOption, index) {
+            if (!isObject(cptOption)) {
+                return;
+            }
+
+            // id has highest priority.
+            for (var i = 0; i < result.length; i++) {
+                if (!result[i].option // Consider name: two map to one.
+                    && cptOption.id != null
+                    && result[i].exist.id === cptOption.id + ''
+                ) {
+                    result[i].option = cptOption;
+                    newCptOptions[index] = null;
+                    return;
+                }
+            }
+
+            for (var i = 0; i < result.length; i++) {
+                var exist = result[i].exist;
+                if (!result[i].option // Consider name: two map to one.
+                    // Can not match when both ids exist but different.
+                    && (exist.id == null || cptOption.id == null)
+                    && cptOption.name != null
+                    && !modelUtil.isIdInner(cptOption)
+                    && !modelUtil.isIdInner(exist)
+                    && exist.name === cptOption.name + ''
+                ) {
+                    result[i].option = cptOption;
+                    newCptOptions[index] = null;
+                    return;
+                }
+            }
+        });
+
+        // Otherwise mapping by index.
+        each(newCptOptions, function (cptOption, index) {
+            if (!isObject(cptOption)) {
+                return;
+            }
+
+            var i = 0;
+            for (; i < result.length; i++) {
+                var exist = result[i].exist;
+                if (!result[i].option
+                    // Existing model that already has id should be able to
+                    // mapped to (because after mapping performed model may
+                    // be assigned with a id, whish should not affect next
+                    // mapping), except those has inner id.
+                    && !modelUtil.isIdInner(exist)
+                    // Caution:
+                    // Do not overwrite id. But name can be overwritten,
+                    // because axis use name as 'show label text'.
+                    // 'exist' always has id and name and we dont
+                    // need to check it.
+                    && cptOption.id == null
+                ) {
+                    result[i].option = cptOption;
+                    break;
+                }
+            }
+
+            if (i >= result.length) {
+                result.push({option: cptOption});
+            }
+        });
+
+        return result;
+    };
+
+    /**
+     * Make id and name for mapping result (result of mappingToExists)
+     * into `keyInfo` field.
+     *
+     * @public
+     * @param {Array.<Object>} Result, like [{exist: ..., option: ...}, {}],
+     *                          which order is the same as exists.
+     * @return {Array.<Object>} The input.
+     */
+    modelUtil.makeIdAndName = function (mapResult) {
+        // We use this id to hash component models and view instances
+        // in echarts. id can be specified by user, or auto generated.
+
+        // The id generation rule ensures new view instance are able
+        // to mapped to old instance when setOption are called in
+        // no-merge mode. So we generate model id by name and plus
+        // type in view id.
+
+        // name can be duplicated among components, which is convenient
+        // to specify multi components (like series) by one name.
+
+        // Ensure that each id is distinct.
+        var idMap = zrUtil.createHashMap();
+
+        each(mapResult, function (item, index) {
+            var existCpt = item.exist;
+            existCpt && idMap.set(existCpt.id, item);
+        });
+
+        each(mapResult, function (item, index) {
+            var opt = item.option;
+
+            zrUtil.assert(
+                !opt || opt.id == null || !idMap.get(opt.id) || idMap.get(opt.id) === item,
+                'id duplicates: ' + (opt && opt.id)
+            );
+
+            opt && opt.id != null && idMap.set(opt.id, item);
+            !item.keyInfo && (item.keyInfo = {});
+        });
+
+        // Make name and id.
+        each(mapResult, function (item, index) {
+            var existCpt = item.exist;
+            var opt = item.option;
+            var keyInfo = item.keyInfo;
+
+            if (!isObject(opt)) {
+                return;
+            }
+
+            // name can be overwitten. Consider case: axis.name = '20km'.
+            // But id generated by name will not be changed, which affect
+            // only in that case: setOption with 'not merge mode' and view
+            // instance will be recreated, which can be accepted.
+            keyInfo.name = opt.name != null
+                ? opt.name + ''
+                : existCpt
+                ? existCpt.name
+                : '\0-'; // name may be displayed on screen, so use '-'.
+
+            if (existCpt) {
+                keyInfo.id = existCpt.id;
+            }
+            else if (opt.id != null) {
+                keyInfo.id = opt.id + '';
+            }
+            else {
+                // Consider this situatoin:
+                //  optionA: [{name: 'a'}, {name: 'a'}, {..}]
+                //  optionB [{..}, {name: 'a'}, {name: 'a'}]
+                // Series with the same name between optionA and optionB
+                // should be mapped.
+                var idNum = 0;
+                do {
+                    keyInfo.id = '\0' + keyInfo.name + '\0' + idNum++;
+                }
+                while (idMap.get(keyInfo.id));
+            }
+
+            idMap.set(keyInfo.id, item);
+        });
+    };
+
+    /**
+     * @public
+     * @param {Object} cptOption
+     * @return {boolean}
+     */
+    modelUtil.isIdInner = function (cptOption) {
+        return isObject(cptOption)
+            && cptOption.id
+            && (cptOption.id + '').indexOf('\0_ec_\0') === 0;
+    };
+
+    /**
+     * A helper for removing duplicate items between batchA and batchB,
+     * and in themselves, and categorize by series.
+     *
+     * @param {Array.<Object>} batchA Like: [{seriesId: 2, dataIndex: [32, 4, 5]}, ...]
+     * @param {Array.<Object>} batchB Like: [{seriesId: 2, dataIndex: [32, 4, 5]}, ...]
+     * @return {Array.<Array.<Object>, Array.<Object>>} result: [resultBatchA, resultBatchB]
+     */
+    modelUtil.compressBatches = function (batchA, batchB) {
+        var mapA = {};
+        var mapB = {};
+
+        makeMap(batchA || [], mapA);
+        makeMap(batchB || [], mapB, mapA);
+
+        return [mapToArray(mapA), mapToArray(mapB)];
+
+        function makeMap(sourceBatch, map, otherMap) {
+            for (var i = 0, len = sourceBatch.length; i < len; i++) {
+                var seriesId = sourceBatch[i].seriesId;
+                var dataIndices = modelUtil.normalizeToArray(sourceBatch[i].dataIndex);
+                var otherDataIndices = otherMap && otherMap[seriesId];
+
+                for (var j = 0, lenj = dataIndices.length; j < lenj; j++) {
+                    var dataIndex = dataIndices[j];
+
+                    if (otherDataIndices && otherDataIndices[dataIndex]) {
+                        otherDataIndices[dataIndex] = null;
+                    }
+                    else {
+                        (map[seriesId] || (map[seriesId] = {}))[dataIndex] = 1;
+                    }
+                }
+            }
+        }
+
+        function mapToArray(map, isData) {
+            var result = [];
+            for (var i in map) {
+                if (map.hasOwnProperty(i) && map[i] != null) {
+                    if (isData) {
+                        result.push(+i);
+                    }
+                    else {
+                        var dataIndices = mapToArray(map[i], true);
+                        dataIndices.length && result.push({seriesId: i, dataIndex: dataIndices});
+                    }
+                }
+            }
+            return result;
+        }
+    };
+
+    /**
+     * @param {module:echarts/data/List} data
+     * @param {Object} payload Contains dataIndex (means rawIndex) / dataIndexInside / name
+     *                         each of which can be Array or primary type.
+     * @return {number|Array.<number>} dataIndex If not found, return undefined/null.
+     */
+    modelUtil.queryDataIndex = function (data, payload) {
+        if (payload.dataIndexInside != null) {
+            return payload.dataIndexInside;
+        }
+        else if (payload.dataIndex != null) {
+            return zrUtil.isArray(payload.dataIndex)
+                ? zrUtil.map(payload.dataIndex, function (value) {
+                    return data.indexOfRawIndex(value);
+                })
+                : data.indexOfRawIndex(payload.dataIndex);
+        }
+        else if (payload.name != null) {
+            return zrUtil.isArray(payload.name)
+                ? zrUtil.map(payload.name, function (value) {
+                    return data.indexOfName(value);
+                })
+                : data.indexOfName(payload.name);
+        }
+    };
+
+    /**
+     * Enable property storage to any host object.
+     * Notice: Serialization is not supported.
+     *
+     * For example:
+     * var get = modelUitl.makeGetter();
+     *
+     * function some(hostObj) {
+     *      get(hostObj)._someProperty = 1212;
+     *      ...
+     * }
+     *
+     * @return {Function}
+     */
+    modelUtil.makeGetter = (function () {
+        var index = 0;
+        return function () {
+            var key = '\0__ec_prop_getter_' + index++;
+            return function (hostObj) {
+                return hostObj[key] || (hostObj[key] = {});
+            };
+        };
+    })();
+
+    /**
+     * @param {module:echarts/model/Global} ecModel
+     * @param {string|Object} finder
+     *        If string, e.g., 'geo', means {geoIndex: 0}.
+     *        If Object, could contain some of these properties below:
+     *        {
+     *            seriesIndex, seriesId, seriesName,
+     *            geoIndex, geoId, geoName,
+     *            bmapIndex, bmapId, bmapName,
+     *            xAxisIndex, xAxisId, xAxisName,
+     *            yAxisIndex, yAxisId, yAxisName,
+     *            gridIndex, gridId, gridName,
+     *            ... (can be extended)
+     *        }
+     *        Each properties can be number|string|Array.<number>|Array.<string>
+     *        For example, a finder could be
+     *        {
+     *            seriesIndex: 3,
+     *            geoId: ['aa', 'cc'],
+     *            gridName: ['xx', 'rr']
+     *        }
+     *        xxxIndex can be set as 'all' (means all xxx) or 'none' (means not specify)
+     *        If nothing or null/undefined specified, return nothing.
+     * @param {Object} [opt]
+     * @param {string} [opt.defaultMainType]
+     * @param {Array.<string>} [opt.includeMainTypes]
+     * @return {Object} result like:
+     *        {
+     *            seriesModels: [seriesModel1, seriesModel2],
+     *            seriesModel: seriesModel1, // The first model
+     *            geoModels: [geoModel1, geoModel2],
+     *            geoModel: geoModel1, // The first model
+     *            ...
+     *        }
+     */
+    modelUtil.parseFinder = function (ecModel, finder, opt) {
+        if (zrUtil.isString(finder)) {
+            var obj = {};
+            obj[finder + 'Index'] = 0;
+            finder = obj;
+        }
+
+        var defaultMainType = opt && opt.defaultMainType;
+        if (defaultMainType
+            && !has(finder, defaultMainType + 'Index')
+            && !has(finder, defaultMainType + 'Id')
+            && !has(finder, defaultMainType + 'Name')
+        ) {
+            finder[defaultMainType + 'Index'] = 0;
+        }
+
+        var result = {};
+
+        each(finder, function (value, key) {
+            var value = finder[key];
+
+            // Exclude 'dataIndex' and other illgal keys.
+            if (key === 'dataIndex' || key === 'dataIndexInside') {
+                result[key] = value;
+                return;
+            }
+
+            var parsedKey = key.match(/^(\w+)(Index|Id|Name)$/) || [];
+            var mainType = parsedKey[1];
+            var queryType = (parsedKey[2] || '').toLowerCase();
+
+            if (!mainType
+                || !queryType
+                || value == null
+                || (queryType === 'index' && value === 'none')
+                || (opt && opt.includeMainTypes && zrUtil.indexOf(opt.includeMainTypes, mainType) < 0)
+            ) {
+                return;
+            }
+
+            var queryParam = {mainType: mainType};
+            if (queryType !== 'index' || value !== 'all') {
+                queryParam[queryType] = value;
+            }
+
+            var models = ecModel.queryComponents(queryParam);
+            result[mainType + 'Models'] = models;
+            result[mainType + 'Model'] = models[0];
+        });
+
+        return result;
+    };
+
+    /**
+     * @see {module:echarts/data/helper/completeDimensions}
+     * @param {module:echarts/data/List} data
+     * @param {string|number} dataDim
+     * @return {string}
+     */
+    modelUtil.dataDimToCoordDim = function (data, dataDim) {
+        var dimensions = data.dimensions;
+        dataDim = data.getDimension(dataDim);
+        for (var i = 0; i < dimensions.length; i++) {
+            var dimItem = data.getDimensionInfo(dimensions[i]);
+            if (dimItem.name === dataDim) {
+                return dimItem.coordDim;
             }
         }
     };
+
+    /**
+     * @see {module:echarts/data/helper/completeDimensions}
+     * @param {module:echarts/data/List} data
+     * @param {string} coordDim
+     * @return {Array.<string>} data dimensions on the coordDim.
+     */
+    modelUtil.coordDimToDataDim = function (data, coordDim) {
+        var dataDim = [];
+        each(data.dimensions, function (dimName) {
+            var dimItem = data.getDimensionInfo(dimName);
+            if (dimItem.coordDim === coordDim) {
+                dataDim[dimItem.coordDimIndex] = dimItem.name;
+            }
+        });
+        return dataDim;
+    };
+
+    /**
+     * @see {module:echarts/data/helper/completeDimensions}
+     * @param {module:echarts/data/List} data
+     * @param {string} otherDim Can be `otherDims`
+     *                        like 'label' or 'tooltip'.
+     * @return {Array.<string>} data dimensions on the otherDim.
+     */
+    modelUtil.otherDimToDataDim = function (data, otherDim) {
+        var dataDim = [];
+        each(data.dimensions, function (dimName) {
+            var dimItem = data.getDimensionInfo(dimName);
+            var otherDims = dimItem.otherDims;
+            var dimIndex = otherDims[otherDim];
+            if (dimIndex != null && dimIndex !== false) {
+                dataDim[dimIndex] = dimItem.name;
+            }
+        });
+        return dataDim;
+    };
+
+    function has(obj, prop) {
+        return obj && obj.hasOwnProperty(prop);
+    }
 
     return modelUtil;
 });

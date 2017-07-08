@@ -4,8 +4,6 @@ define(function (require) {
     var Path = require('zrender/graphic/Path');
     var vec2 = require('zrender/core/vector');
 
-    var mathMin = Math.min;
-    var mathMax = Math.max;
     var vec2Min = vec2.min;
     var vec2Max = vec2.max;
 
@@ -17,14 +15,26 @@ define(function (require) {
     var cp0 = [];
     var cp1 = [];
 
+    function isPointNull(p) {
+        return isNaN(p[0]) || isNaN(p[1]);
+    }
+
     function drawSegment(
-        ctx, points, start, allLen, segLen,
-        dir, smoothMin, smoothMax, smooth
+        ctx, points, start, segLen, allLen,
+        dir, smoothMin, smoothMax, smooth, smoothMonotone, connectNulls
     ) {
+        var prevIdx = 0;
         var idx = start;
         for (var k = 0; k < segLen; k++) {
             var p = points[idx];
-            if (idx >= allLen || idx < 0 || isNaN(p[0]) || isNaN(p[1])) {
+            if (idx >= allLen || idx < 0) {
+                break;
+            }
+            if (isPointNull(p)) {
+                if (connectNulls) {
+                    idx += dir;
+                    continue;
+                }
                 break;
             }
 
@@ -34,25 +44,47 @@ define(function (require) {
             }
             else {
                 if (smooth > 0) {
-                    var prevIdx = idx - dir;
                     var nextIdx = idx + dir;
+                    var nextP = points[nextIdx];
+                    if (connectNulls) {
+                        // Find next point not null
+                        while (nextP && isPointNull(points[nextIdx])) {
+                            nextIdx += dir;
+                            nextP = points[nextIdx];
+                        }
+                    }
+
+                    var ratioNextSeg = 0.5;
+                    var prevP = points[prevIdx];
+                    var nextP = points[nextIdx];
                     // Last point
-                    if ((dir > 0 && idx === allLen - 1)
-                        || (dir <= 0 && idx  === 0)
-                    ) {
+                    if (!nextP || isPointNull(nextP)) {
                         v2Copy(cp1, p);
                     }
                     else {
-                        var prevP = points[prevIdx];
-                        var nextP = points[nextIdx];
-                        // If next data is null
-                        if (isNaN(nextP[0]) || isNaN(nextP[1])) {
+                        // If next data is null in not connect case
+                        if (isPointNull(nextP) && !connectNulls) {
                             nextP = p;
                         }
 
                         vec2.sub(v, nextP, prevP);
 
-                        scaleAndAdd(cp1, p, v, -smooth / 2);
+                        var lenPrevSeg;
+                        var lenNextSeg;
+                        if (smoothMonotone === 'x' || smoothMonotone === 'y') {
+                            var dim = smoothMonotone === 'x' ? 0 : 1;
+                            lenPrevSeg = Math.abs(p[dim] - prevP[dim]);
+                            lenNextSeg = Math.abs(p[dim] - nextP[dim]);
+                        }
+                        else {
+                            lenPrevSeg = vec2.dist(p, prevP);
+                            lenNextSeg = vec2.dist(p, nextP);
+                        }
+
+                        // Use ratio of seg length
+                        ratioNextSeg = lenNextSeg / (lenNextSeg + lenPrevSeg);
+
+                        scaleAndAdd(cp1, p, v, -smooth * (1 - ratioNextSeg));
                     }
                     // Smooth constraint
                     vec2Min(cp0, cp0, smoothMax);
@@ -66,13 +98,14 @@ define(function (require) {
                         p[0], p[1]
                     );
                     // cp0 of next segment
-                    scaleAndAdd(cp0, p, v, smooth / 2);
+                    scaleAndAdd(cp0, p, v, smooth * ratioNextSeg);
                 }
                 else {
                     ctx.lineTo(p[0], p[1]);
                 }
             }
 
+            prevIdx = idx;
             idx += dir;
         }
 
@@ -108,7 +141,11 @@ define(function (require) {
 
                 smooth: 0,
 
-                smoothConstraint: true
+                smoothConstraint: true,
+
+                smoothMonotone: null,
+
+                connectNulls: false
             },
 
             style: {
@@ -125,10 +162,24 @@ define(function (require) {
 
                 var result = getBoundingBox(points, shape.smoothConstraint);
 
+                if (shape.connectNulls) {
+                    // Must remove first and last null values avoid draw error in polygon
+                    for (; len > 0; len--) {
+                        if (!isPointNull(points[len - 1])) {
+                            break;
+                        }
+                    }
+                    for (; i < len; i++) {
+                        if (!isPointNull(points[i])) {
+                            break;
+                        }
+                    }
+                }
                 while (i < len) {
                     i += drawSegment(
                         ctx, points, i, len, len,
-                        1, result.min, result.max, shape.smooth
+                        1, result.min, result.max, shape.smooth,
+                        shape.smoothMonotone, shape.connectNulls
                     ) + 1;
                 }
             }
@@ -140,11 +191,19 @@ define(function (require) {
 
             shape: {
                 points: [],
+
                 // Offset between stacked base points and points
                 stackedOnPoints: [],
+
                 smooth: 0,
+
                 stackedOnSmooth: 0,
-                smoothConstraint: true
+
+                smoothConstraint: true,
+
+                smoothMonotone: null,
+
+                connectNulls: false
             },
 
             buildPath: function (ctx, shape) {
@@ -153,16 +212,33 @@ define(function (require) {
 
                 var i = 0;
                 var len = points.length;
+                var smoothMonotone = shape.smoothMonotone;
                 var bbox = getBoundingBox(points, shape.smoothConstraint);
                 var stackedOnBBox = getBoundingBox(stackedOnPoints, shape.smoothConstraint);
+
+                if (shape.connectNulls) {
+                    // Must remove first and last null values avoid draw error in polygon
+                    for (; len > 0; len--) {
+                        if (!isPointNull(points[len - 1])) {
+                            break;
+                        }
+                    }
+                    for (; i < len; i++) {
+                        if (!isPointNull(points[i])) {
+                            break;
+                        }
+                    }
+                }
                 while (i < len) {
                     var k = drawSegment(
                         ctx, points, i, len, len,
-                        1, bbox.min, bbox.max, shape.smooth
+                        1, bbox.min, bbox.max, shape.smooth,
+                        smoothMonotone, shape.connectNulls
                     );
                     drawSegment(
-                        ctx, stackedOnPoints, i + k - 1, len, k,
-                        -1, stackedOnBBox.min, stackedOnBBox.max, shape.stackedOnSmooth
+                        ctx, stackedOnPoints, i + k - 1, k, len,
+                        -1, stackedOnBBox.min, stackedOnBBox.max, shape.stackedOnSmooth,
+                        smoothMonotone, shape.connectNulls
                     );
                     i += k + 1;
 

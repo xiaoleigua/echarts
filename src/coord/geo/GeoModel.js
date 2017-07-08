@@ -3,8 +3,14 @@ define(function (require) {
     'use strict';
     var modelUtil = require('../../util/model');
     var ComponentModel = require('../../model/Component');
+    var Model = require('../../model/Model');
+    var zrUtil = require('zrender/core/util');
 
-    ComponentModel.extend({
+    var selectableMixin = require('../../component/helper/selectableMixin');
+
+    var geoCreator = require('./geoCreator');
+
+    var GeoModel = ComponentModel.extend({
 
         type: 'geo',
 
@@ -13,6 +19,8 @@ define(function (require) {
          */
         coordinateSystem: null,
 
+        layoutMode: 'box',
+
         init: function (option) {
             ComponentModel.prototype.init.apply(this, arguments);
 
@@ -20,6 +28,22 @@ define(function (require) {
             modelUtil.defaultEmphasis(
                 option.label, ['position', 'show', 'textStyle', 'distance', 'formatter']
             );
+        },
+
+        optionUpdated: function () {
+            var option = this.option;
+            var self = this;
+
+            option.regions = geoCreator.getFilledRegions(option.regions, option.map);
+
+            this._optionModelMap = zrUtil.reduce(option.regions || [], function (optionModelMap, regionOpt) {
+                if (regionOpt.name) {
+                    optionModelMap.set(regionOpt.name, new Model(regionOpt, self));
+                }
+                return optionModelMap;
+            }, zrUtil.createHashMap());
+
+            this.updateSelectedMap(option.regions);
         },
 
         defaultOption: {
@@ -34,21 +58,40 @@ define(function (require) {
 
             top: 'center',
 
-            // 自适应
+
             // width:,
             // height:,
             // right
             // bottom
 
+            // Aspect is width / height. Inited to be geoJson bbox aspect
+            // This parameter is used for scale this aspect
+            aspectScale: 0.75,
+
+            ///// Layout with center and size
+            // If you wan't to put map in a fixed size box with right aspect ratio
+            // This two properties may more conveninet
+            // layoutCenter: [50%, 50%]
+            // layoutSize: 100
+
+
+            silent: false,
+
             // Map type
             map: '',
 
-            // 在 roam 开启的时候使用
-            roamDetail: {
-                x: 0,
-                y: 0,
-                zoom: 1
-            },
+            // Define left-top, right-bottom coords to control view
+            // For example, [ [180, 90], [-180, -90] ]
+            boundingCoords: null,
+
+            // Default on center of map
+            center: null,
+
+            zoom: 1,
+
+            scaleLimit: null,
+
+            // selectedMode: false
 
             label: {
                 normal: {
@@ -75,7 +118,18 @@ define(function (require) {
                 emphasis: {                 // 也是选中样式
                     color: 'rgba(255,215,0,0.8)'
                 }
-            }
+            },
+
+            regions: []
+        },
+
+        /**
+         * Get model of region
+         * @param  {string} name
+         * @return {module:echarts/model/Model}
+         */
+        getRegionModel: function (name) {
+            return this._optionModelMap.get(name) || new Model(null, this, this.ecModel);
         },
 
         /**
@@ -85,7 +139,8 @@ define(function (require) {
          * @return {string}
          */
         getFormattedLabel: function (name, status) {
-            var formatter = this.get('label.' + status + '.formatter');
+            var regionModel = this.getRegionModel(name);
+            var formatter = regionModel.get('label.' + status + '.formatter');
             var params = {
                 name: name
             };
@@ -94,21 +149,21 @@ define(function (require) {
                 return formatter(params);
             }
             else if (typeof formatter === 'string') {
-                return formatter.replace('{a}', params.seriesName);
+                var serName = params.seriesName;
+                return formatter.replace('{a}', serName != null ? serName : '');
             }
         },
 
-        setRoamZoom: function (zoom) {
-            var roamDetail = this.option.roamDetail;
-            roamDetail && (roamDetail.zoom = zoom);
+        setZoom: function (zoom) {
+            this.option.zoom = zoom;
         },
 
-        setRoamPan: function (x, y) {
-            var roamDetail = this.option.roamDetail;
-            if (roamDetail) {
-                roamDetail.x = x;
-                roamDetail.y = y;
-            }
+        setCenter: function (center) {
+            this.option.center = center;
         }
     });
+
+    zrUtil.mixin(GeoModel, selectableMixin);
+
+    return GeoModel;
 });

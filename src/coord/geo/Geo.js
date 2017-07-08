@@ -13,7 +13,8 @@ define(function (require) {
     var geoFixFuncs = [
         require('./fix/nanhai'),
         require('./fix/textCoord'),
-        require('./fix/geoCoord')
+        require('./fix/geoCoord'),
+        require('./fix/diaoyuIsland')
     ];
 
     /**
@@ -35,13 +36,8 @@ define(function (require) {
          * @type {string}
          */
         this.map = map;
-        /**
-         * @param {Array.<string>}
-         * @readOnly
-         */
-        this.dimensions = ['lng', 'lat'];
 
-        this._nameCoordMap = {};
+        this._nameCoordMap = zrUtil.createHashMap();
 
         this.loadGeoJson(geoJson, specialAreas, nameMap);
     }
@@ -52,6 +48,26 @@ define(function (require) {
 
         type: 'geo',
 
+        /**
+         * @param {Array.<string>}
+         * @readOnly
+         */
+        dimensions: ['lng', 'lat'],
+
+        /**
+         * If contain given lng,lat coord
+         * @param {Array.<number>}
+         * @readOnly
+         */
+        containCoord: function (coord) {
+            var regions = this.regions;
+            for (var i = 0; i < regions.length; i++) {
+                if (regions[i].contain(coord)) {
+                    return true;
+                }
+            }
+            return false;
+        },
         /**
          * @param {Object} geoJson
          * @param {Object} [specialAreas]
@@ -65,19 +81,19 @@ define(function (require) {
                 this.regions = geoJson ? parseGeoJson(geoJson) : [];
             }
             catch (e) {
-                throw 'Invalid geoJson format\n' + e;
+                throw 'Invalid geoJson format\n' + e.message;
             }
             specialAreas = specialAreas || {};
             nameMap = nameMap || {};
             var regions = this.regions;
-            var regionsMap = {};
+            var regionsMap = zrUtil.createHashMap();
             for (var i = 0; i < regions.length; i++) {
                 var regionName = regions[i].name;
                 // Try use the alias in nameMap
-                regionName = nameMap[regionName] || regionName;
+                regionName = nameMap.hasOwnProperty(regionName) ? nameMap[regionName] : regionName;
                 regions[i].name = regionName;
 
-                regionsMap[regionName] = regions[i];
+                regionsMap.set(regionName, regions[i]);
                 // Add geoJson
                 this.addGeoCoord(regionName, regions[i].center);
 
@@ -129,7 +145,16 @@ define(function (require) {
          * @return {module:echarts/coord/geo/Region}
          */
         getRegion: function (name) {
-            return this._regionsMap[name];
+            return this._regionsMap.get(name);
+        },
+
+        getRegionByCoord: function (coord) {
+            var regions = this.regions;
+            for (var i = 0; i < regions.length; i++) {
+                if (regions[i].contain(coord)) {
+                    return regions[i];
+                }
+            }
         },
 
         /**
@@ -138,7 +163,7 @@ define(function (require) {
          * @param {Array.<number>} geoCoord
          */
         addGeoCoord: function (name, geoCoord) {
-            this._nameCoordMap[name] = geoCoord;
+            this._nameCoordMap.set(name, geoCoord);
         },
 
         /**
@@ -147,7 +172,7 @@ define(function (require) {
          * @return {Array.<number>}
          */
         getGeoCoord: function (name) {
-            return this._nameCoordMap[name];
+            return this._nameCoordMap.get(name);
         },
 
         // Overwrite
@@ -184,7 +209,6 @@ define(function (require) {
             }, this);
         },
 
-        // Overwrite
         /**
          * @param {string|Array.<number>} data
          * @return {Array.<number>}
@@ -197,10 +221,37 @@ define(function (require) {
             if (data) {
                 return View.prototype.dataToPoint.call(this, data);
             }
-        }
+        },
+
+        /**
+         * @inheritDoc
+         */
+        convertToPixel: zrUtil.curry(doConvert, 'dataToPoint'),
+
+        /**
+         * @inheritDoc
+         */
+        convertFromPixel: zrUtil.curry(doConvert, 'pointToData')
+
     };
 
     zrUtil.mixin(Geo, View);
+
+    function doConvert(methodName, ecModel, finder, value) {
+        var geoModel = finder.geoModel;
+        var seriesModel = finder.seriesModel;
+
+        var coordSys = geoModel
+            ? geoModel.coordinateSystem
+            : seriesModel
+            ? (
+                seriesModel.coordinateSystem // For map.
+                || (seriesModel.getReferringComponents('geo')[0] || {}).coordinateSystem
+            )
+            : null;
+
+        return coordSys === this ? coordSys[methodName](value) : null;
+    }
 
     return Geo;
 });
